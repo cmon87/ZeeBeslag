@@ -177,7 +177,7 @@ const engine = fs.readFileSync(path.join(root, 'src/core/engine.js'), 'utf8');
 const heat = fs.readFileSync(path.join(root, 'src/environment/heatFx.js'), 'utf8');
 const telemetry = fs.readFileSync(path.join(root, 'src/core/telemetry.js'), 'utf8');
 const islandSource = fs.readFileSync(path.join(root, 'src/game/islandTarget.js'), 'utf8');
-check(main.includes("M6.6.0 mobiele-performance"), 'buildnummer is fase 5');
+check(/M(?:6\.6\.0 mobiele-performance|7\.0\.0 level1-bruggenhoofd)/.test(main), 'mobiele-performancebasis blijft aanwezig in huidige build');
 check(main.includes('depthMap.renderList = depthRenderList'), 'depthprepass heeft expliciete renderlijst');
 check(main.includes('syncDepthRenderList()'), 'dieptelijst wordt na GLB-load gesynchroniseerd');
 check(main.includes('maxMergeVertices: PERF.maxMergeVertices'), 'runtime merge heeft geheugengrens');
