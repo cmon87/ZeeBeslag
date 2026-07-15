@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+*.zip
+zeebeslag_telemetrie_*.json
+_backup/
+*.bak
+.DS_Store
+Thumbs.db
