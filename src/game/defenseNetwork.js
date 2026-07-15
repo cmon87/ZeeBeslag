@@ -103,14 +103,13 @@ export class DefenseNetwork {
     this._scanRadar(playerPos);
 
     for (const emp of this.registry.list) {
-      if (!emp || !emp.alive || emp.canFire !== true || !emp.root) continue;
+      if (!emp || !emp.alive || emp.canFire !== true || !emp.root ||
+          (emp.missionControlled && emp.missionState !== 'active')) continue;
       const dist = distanceXZ(emp.root.position, playerPos);
       const maxRange = (emp.engageRange ?? 3200) * this.difficulty.rangeMultiplier;
       let source = null;
 
       const visualRange = (emp.visualRange ?? 1750) * this.difficulty.rangeMultiplier;
-      // Een levende radar levert de beste vuurleidingskwaliteit. Zonder radar valt de batterij
-      // terug op eigen zicht; achter terrein blijft alleen kort contactgeheugen over.
       if (this._radarContact && dist <= maxRange) source = 'radar';
       else if (dist <= visualRange && this._hasLos(emp, playerPos)) source = 'visual';
 
@@ -129,7 +128,8 @@ export class DefenseNetwork {
     this._radarSourceId = null;
     const range = this.cfg.radarRange * this.difficulty.rangeMultiplier;
     for (const radar of this.registry.list) {
-      if (!radar || !radar.alive || radar.type !== 'radar' || !radar.root) continue;
+      if (!radar || !radar.alive || radar.type !== 'radar' || !radar.root ||
+          (radar.missionControlled && radar.missionState !== 'active')) continue;
       if (distanceXZ(radar.root.position, playerPos) > range) continue;
       if (!this._hasLos(radar, playerPos)) continue;
       this._radarContact = true;
@@ -156,6 +156,7 @@ export class DefenseNetwork {
   getFireControl(emp, simTime) {
     const status = this.refreshStatus();
     if (!emp || !emp.alive || emp.canFire !== true ||
+        (emp.missionControlled && emp.missionState !== 'active') ||
         typeof emp.hasContact !== 'function' || !emp.hasContact(simTime)) {
       return { canEngage: false, contactSource: 'none' };
     }
