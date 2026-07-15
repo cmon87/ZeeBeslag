@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<!-- index.html -->
 <html lang="nl">
 <head>
   <meta charset="UTF-8">
@@ -8,220 +7,153 @@
   <style>
     * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
     html, body {
-      width:100%; height:100%; overflow:hidden;
-      background:#05080c; color:#cfe1ee;
-      font-family:"Courier New", monospace;
-      overscroll-behavior:none; user-select:none;
+      width:100%; height:100%; overflow:hidden; background:#05080c; color:#cfe1ee;
+      font-family:"Courier New",monospace; overscroll-behavior:none; user-select:none;
       -webkit-user-select:none; -webkit-touch-callout:none; touch-action:none;
     }
     #renderCanvas { width:100%; height:100%; touch-action:none; outline:none; display:block; }
-
-    /* Virtuele joysticks. controls.js zoekt deze vier id's met getElementById en dereferenceert
-       ze zonder null-check. Ontbreken ze, dan gooit controls.js bij elke pointermove een
-       TypeError op k.style. Weghalen mag alleen als controls.js meeverhuist. */
     .joystick-base {
       position:fixed; width:110px; height:110px; border-radius:50%;
-      background:rgba(126,184,212,0.10); border:1.5px solid rgba(126,184,212,0.25);
+      background:rgba(126,184,212,.10); border:1.5px solid rgba(126,184,212,.25);
       transform:translate(-50%,-50%); pointer-events:none; opacity:0; z-index:50;
-      transition:opacity 0.2s; backdrop-filter:blur(2px);
+      transition:opacity .2s; backdrop-filter:blur(2px);
     }
     .joystick-knob {
       position:absolute; top:50%; left:50%; width:44px; height:44px; border-radius:50%;
-      background:rgba(126,184,212,0.6); transform:translate(-50%,-50%);
-      box-shadow:0 4px 12px rgba(0,0,0,0.5), inset 0 0 8px rgba(255,255,255,0.3);
+      background:rgba(126,184,212,.6); transform:translate(-50%,-50%);
+      box-shadow:0 4px 12px rgba(0,0,0,.5),inset 0 0 8px rgba(255,255,255,.3);
     }
-
-    #alt-controls {
-      position:fixed; right:24px; bottom:84px;
-      display:flex; flex-direction:column; gap:12px; z-index:15;
+    #combat-controls {
+      position:fixed; right:max(18px,env(safe-area-inset-right));
+      bottom:max(22px,env(safe-area-inset-bottom)); z-index:72; pointer-events:auto;
     }
-    .alt-btn {
-      background:rgba(10,20,40,0.75); color:#7eb8d4;
-      border:1px solid rgba(126,184,212,0.35);
-      width:42px; height:42px; border-radius:8px; font-size:16px;
-      display:flex; align-items:center; justify-content:center;
-      backdrop-filter:blur(8px); transition:transform 0.1s, background 0.15s; user-select:none;
+    #btnFire {
+      width:72px; height:72px; border-radius:50%; border:2px solid rgba(255,122,104,.78);
+      background:radial-gradient(circle at 35% 30%,rgba(255,150,120,.72),rgba(150,28,18,.92));
+      color:#fff; font-size:27px; font-weight:bold;
+      box-shadow:0 7px 22px rgba(0,0,0,.55),0 0 16px rgba(255,90,65,.30);
+      touch-action:none; user-select:none; transition:transform .08s,opacity .15s,border-color .15s;
     }
-    .alt-btn.active { background:rgba(126,184,212,0.4); color:#fff; transform:scale(0.9); }
-
+    #btnFire[data-ready="1"] {
+      border-color:rgba(126,232,176,.95);
+      box-shadow:0 7px 22px rgba(0,0,0,.55),0 0 18px rgba(126,232,176,.42);
+    }
+    #btnFire:disabled { filter:saturate(.45); }
+    #orientation-warning {
+      display:none; position:fixed; inset:0; z-index:100000; align-items:center; justify-content:center;
+      padding:28px; text-align:center; background:#05080c; color:#dbe7ed;
+      font:bold 15px "Courier New",monospace; letter-spacing:.06em; line-height:1.5; touch-action:none;
+    }
+    @media (orientation:portrait) and (max-width:900px) { #orientation-warning { display:flex; } }
     #crash-screen {
-      display:none; position:fixed; inset:0; z-index:99999;
-      background:rgba(7,14,26,0.98); padding:16px; overflow-y:auto;
-      touch-action:pan-y; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
-      user-select:text; -webkit-user-select:text;
+      display:none; position:fixed; inset:0; z-index:99999; background:rgba(7,14,26,.98);
+      padding:16px; overflow-y:auto; touch-action:pan-y; backdrop-filter:blur(8px);
+      -webkit-backdrop-filter:blur(8px); user-select:text; -webkit-user-select:text;
     }
     .crash-btn {
-      display:inline-flex; justify-content:space-between; align-items:center;
-      width:100%; max-width:320px; margin-top:16px; padding:12px 14px;
-      background:rgba(255,122,104,0.10); border:1px solid rgba(255,122,104,0.4);
-      border-radius:8px; color:#ffd0c0; font:bold 11px "Courier New",monospace;
-      touch-action:none; transition:transform 0.1s, opacity 0.1s;
+      display:inline-flex; justify-content:space-between; align-items:center; width:100%; max-width:320px;
+      margin-top:16px; padding:12px 14px; background:rgba(255,122,104,.10);
+      border:1px solid rgba(255,122,104,.4); border-radius:8px; color:#ffd0c0;
+      font:bold 11px "Courier New",monospace; touch-action:none; transition:transform .1s,opacity .1s;
     }
   </style>
 </head>
 <body oncontextmenu="return false;">
-
 <div id="crash-screen"></div>
-
 <script>
-// Vroege foutvanger. Staat BEWUST voor alle andere scripts.
-// Alles wat hier binnenkomt gaat in window.__zbEarlyErrors; telemetry.js leest die array uit
-// zodra hij laadt. Zonder deze haak raken fouten van voor de boot kwijt.
 (function () {
   var errs = window.__zbEarlyErrors = [];
   function push(soort, msg, extra) {
-    errs.push(Object.assign({ soort: soort, msg: String(msg), t: performance.now() / 1000 }, extra || {}));
+    errs.push(Object.assign({ soort:soort, msg:String(msg), t:performance.now()/1000 }, extra || {}));
     if (errs.length > 40) errs.shift();
   }
   window.__zbPushError = push;
-
   window.addEventListener('error', function (e) {
     if (e.target && e.target.tagName === 'SCRIPT' && e.target.src) {
-      if (/babylon/i.test(e.target.src)) return;   // vendor naar CDN terugval is normaal
-      push('script-laadfout', 'script laadt niet: ' + e.target.src);
-      return;
+      if (/babylon/i.test(e.target.src)) return;
+      push('script-laadfout','script laadt niet: '+e.target.src); return;
     }
-    push('runtime-fout', e.message || 'onbekend', {
-      bron: e.filename, regel: e.lineno, kolom: e.colno,
-      stack: (e.error && e.error.stack) ? String(e.error.stack).slice(0, 1500) : null
+    push('runtime-fout',e.message || 'onbekend',{
+      bron:e.filename, regel:e.lineno, kolom:e.colno,
+      stack:(e.error && e.error.stack) ? String(e.error.stack).slice(0,1500) : null
     });
-  }, true);
-
-  window.addEventListener('unhandledrejection', function (e) {
-    var r = e && e.reason;
-    push('afgewezen promise', String((r && r.message) || r), {
-      stack: (r && r.stack) ? String(r.stack).slice(0, 1500) : null
+  },true);
+  window.addEventListener('unhandledrejection',function (e) {
+    var r=e && e.reason;
+    push('afgewezen promise',String((r && r.message)||r),{
+      stack:(r && r.stack) ? String(r.stack).slice(0,1500) : null
     });
   });
 })();
 </script>
-
 <canvas id="renderCanvas"></canvas>
-
-<div id="alt-controls" data-ui>
-  <button class="alt-btn" id="btnUp">&#9650;</button>
-  <button class="alt-btn" id="btnDown">&#9660;</button>
-  <button class="alt-btn" id="btnFire" style="background:rgba(200,50,0,0.35);color:#ffb0a0;">&#10042;</button>
-</div>
-
+<div id="orientation-warning" data-ui>DRAAI JE TELEFOON HORIZONTAAL<br>LEVEL 1 IS ONTWORPEN VOOR LANDSCAPE.</div>
+<div id="combat-controls" data-ui><button id="btnFire" aria-label="Vuur salvo">&#10042;</button></div>
 <div class="joystick-base" id="joyBaseL"><div class="joystick-knob" id="joyKnobL"></div></div>
-<div class="joystick-base" id="joyBaseR"><div class="joystick-knob" id="joyKnobR"></div></div>
-
-<!-- Babylon GEPIND op 9.14.0.
-     De ongepinde cdn.babylonjs.com/babylon.js heeft dit project al twee keer stil gebroken door
-     versiedrift in de WebGPU compute-pipeline. De laatste telemetriedump draaide op 9.16.1.
-
-     babylon.js is ALLEEN de kern. Zonder babylonjs.loaders.min.js kent SceneLoader geen enkele
-     plugin voor .glb en laden schip noch eiland. Dat is precies wat er gebeurde:
-     schip.glbGeladen = false, eiland.glbGeladen = false, doelen 0/0.
-
-     Voorkeur is een lokale vendor-kopie, dan werkt offline dev ook:
-       mkdir -p vendor
-       curl -L -o vendor/babylon-9.14.0.js https://cdn.babylonjs.com/v9.14.0/babylon.js
-       curl -L -o vendor/babylonjs.loaders-9.14.0.min.js https://cdn.babylonjs.com/v9.14.0/loaders/babylonjs.loaders.min.js -->
 <script src="vendor/babylon-9.14.0.js"></script>
 <script>if(!window.BABYLON)document.write('<script src="https://cdn.babylonjs.com/v9.14.0/babylon.js" crossorigin="anonymous"><\/script>');</script>
 <script src="vendor/babylonjs.loaders-9.14.0.min.js"></script>
 <script>if(!(window.BABYLON&&BABYLON.SceneLoader&&BABYLON.SceneLoader.IsPluginForExtensionAvailable&&BABYLON.SceneLoader.IsPluginForExtensionAvailable('.glb')))document.write('<script src="https://cdn.babylonjs.com/v9.14.0/loaders/babylonjs.loaders.min.js" crossorigin="anonymous"><\/script>');</script>
-
 <script type="module">
-  // Dynamische import: parse- en resolutiefouten komen zo als vangbare promise rejection binnen.
   (async function boot() {
     try {
-      if (!window.BABYLON) throw new Error('Babylon is niet geladen. Vendor en CDN beide mislukt. Ben je offline zonder vendor-map?');
-      if (!BABYLON.SceneLoader.IsPluginForExtensionAvailable('.glb'))
-        throw new Error('Geen glTF-loader. babylonjs.loaders.min.js ontbreekt; .glb-bestanden laden niet.');
+      if (!window.BABYLON) throw new Error('Babylon is niet geladen. Vendor en CDN beide mislukt.');
+      if (!BABYLON.SceneLoader.IsPluginForExtensionAvailable('.glb')) throw new Error('Geen glTF-loader.');
       await import('./src/main.js');
-    } catch (err) {
-      showCrash(err);
-    }
+    } catch (err) { showCrash(err); }
   })();
 
-  // Haalt bestand, regel en kolom op die de vroege error-listener ving. Module-parsefouten
-  // (SyntaxError uit een dynamische import) komen als kale rejection binnen zonder locatie in
-  // err.stack; de listener op window 'error' heeft die locatie meestal wel. We koppelen ze.
   function vroegeLocatie(err) {
-    const buf = window.__zbEarlyErrors || [];
-    for (let i = buf.length - 1; i >= 0; i--) {
-      const e = buf[i];
-      if (e && e.bron && (e.regel != null)) {
-        const naam = String(e.bron).split('/').pop();
-        return { bron: e.bron, bestand: naam, regel: e.regel, kolom: e.kolom, stack: e.stack || null };
+    const buf=window.__zbEarlyErrors || [];
+    for (let i=buf.length-1;i>=0;i--) {
+      const e=buf[i];
+      if (e && e.bron && e.regel!=null) {
+        const naam=String(e.bron).split('/').pop();
+        return { bron:e.bron,bestand:naam,regel:e.regel,kolom:e.kolom,stack:e.stack||null };
       }
     }
     return null;
   }
 
   function showCrash(err) {
-    const screen = document.getElementById('crash-screen');
-    screen.style.display = 'block';
-
-    const loc = vroegeLocatie(err);
-    const time = new Date().toISOString();
-    const ua = navigator.userAgent;
-    let msg = err.message || String(err);
-    const type = err.name || 'Error';
-
-    // Een SyntaxError uit import() zegt vaak alleen "Unexpected token" zonder waar. Vul aan met
-    // de locatie die de error-listener ving, en benoem dat het een parseerfout in een module is.
-    if (loc && (type === 'SyntaxError' || /unexpected token|unexpected|expected/i.test(msg))) {
-      msg = `${msg}  ->  parseerfout in ${loc.bestand} regel ${loc.regel}${loc.kolom != null ? (' kolom ' + loc.kolom) : ''}`;
-    } else if (loc && !err.stack) {
-      msg = `${msg}  ->  ${loc.bestand} regel ${loc.regel}`;
-    }
-
-    let stack = err.stack
-      || (loc ? `${loc.bron}:${loc.regel}${loc.kolom != null ? (':' + loc.kolom) : ''}${loc.stack ? ('\n\n' + loc.stack) : ''}`
-              : 'Geen stacktrace. Bij een SyntaxError is dit meestal een ontbrekende of losse .js: controleer het laatst gewijzigde bestand op een tikfout, en of alle imports de .js-extensie hebben.');
-    const bab = window.BABYLON && BABYLON.Engine ? BABYLON.Engine.Version : 'niet geladen';
-    const glb = (window.BABYLON && BABYLON.SceneLoader && BABYLON.SceneLoader.IsPluginForExtensionAvailable)
+    const screen=document.getElementById('crash-screen');
+    screen.style.display='block';
+    const loc=vroegeLocatie(err);
+    const time=new Date().toISOString();
+    const ua=navigator.userAgent;
+    let msg=err.message || String(err);
+    const type=err.name || 'Error';
+    if (loc && (type==='SyntaxError' || /unexpected token|unexpected|expected/i.test(msg))) {
+      msg=`${msg} -> parseerfout in ${loc.bestand} regel ${loc.regel}${loc.kolom!=null ? (' kolom '+loc.kolom) : ''}`;
+    } else if (loc && !err.stack) msg=`${msg} -> ${loc.bestand} regel ${loc.regel}`;
+    const stack=err.stack || (loc ? `${loc.bron}:${loc.regel}${loc.kolom!=null ? (':'+loc.kolom) : ''}` : 'Geen stacktrace.');
+    const bab=window.BABYLON && BABYLON.Engine ? BABYLON.Engine.Version : 'niet geladen';
+    const glb=(window.BABYLON && BABYLON.SceneLoader && BABYLON.SceneLoader.IsPluginForExtensionAvailable)
       ? (BABYLON.SceneLoader.IsPluginForExtensionAvailable('.glb') ? 'ja' : 'NEE') : 'onbekend';
-
-    screen.innerHTML = `
-      <div style="border-bottom:1px solid rgba(255,122,104,0.3);padding-bottom:12px;margin-bottom:12px;">
-        <h2 style="color:#ff7a68;font-size:16px;margin:0 0 4px;letter-spacing:0.1em;">ZEEBESLAG FATALE FOUT</h2>
-        <div style="font-size:10px;color:#8b9fac;">${time}</div>
+    screen.innerHTML=`
+      <div style="border-bottom:1px solid rgba(255,122,104,.3);padding-bottom:12px;margin-bottom:12px">
+        <h2 style="color:#ff7a68;font-size:16px;margin:0 0 4px;letter-spacing:.1em">ZEEBESLAG FATALE FOUT</h2>
+        <div style="font-size:10px;color:#8b9fac">${time}</div>
       </div>
-      <div style="font-size:11px;line-height:1.4;background:rgba(255,122,104,0.05);padding:12px;border-radius:6px;border:1px solid rgba(255,122,104,0.15);margin-bottom:12px;word-break:break-word;">
-        <strong style="color:#ff7a68;">${msg}</strong>
-      </div>
-      <div style="font-size:10px;color:#8b9fac;margin-bottom:6px;">DETAILS EN STACKTRACE (${type})</div>
-      <div style="font-size:9px;background:#040810;padding:12px;border-radius:6px;border:1px solid rgba(126,184,212,0.2);overflow-x:auto;white-space:pre-wrap;color:#7eb8d4;">${stack}</div>
-      <div style="font-size:9px;color:#8b9fac;margin-top:12px;word-break:break-all;">
-        babylon: ${bab} &nbsp;|&nbsp; glb-loader: ${glb}<br>${ua}
-      </div>
-      <div id="btnCopyCrash" class="crash-btn">
-        <span>KOPIEER RAPPORT</span><span style="color:#ff7a68;font-size:9px;">(HOLD)</span>
-      </div>`;
-
-    const btn = document.getElementById('btnCopyCrash');
-    let holdTimer = null, aborted = false;
-    const report = `ZeeBeslag Foutrapport\nDatum: ${time}\nType: ${type}\nBabylon: ${bab}\nGLB-loader: ${glb}\n\nFout: ${msg}\n\nStacktrace:\n${stack}\n\nApparaat: ${ua}`;
-
-    const stop = (e) => {
-      aborted = true; clearTimeout(holdTimer);
-      btn.style.transform = 'scale(1)'; btn.style.opacity = '1';
-      try { btn.releasePointerCapture(e.pointerId); } catch (_) {}
-    };
-    btn.addEventListener('pointerdown', (e) => {
-      btn.setPointerCapture(e.pointerId);
-      aborted = false;
-      btn.style.transform = 'scale(0.94)'; btn.style.opacity = '0.6';
-      if (navigator.vibrate) navigator.vibrate(10);
-      holdTimer = setTimeout(() => {
-        if (aborted) return;
-        aborted = true;
-        if (navigator.vibrate) navigator.vibrate([10, 30, 50]);
-        const done = (ok) => { btn.innerHTML = ok
-          ? '<span style="color:#7ee8b0;">RAPPORT GEKOPIEERD</span>'
-          : '<span style="color:#ffcf6a;">KOPIEREN MISLUKT, SELECTEER HANDMATIG</span>'; };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(report).then(() => done(true), () => done(false));
-        } else done(false);
-      }, 500);
+      <div style="font-size:11px;line-height:1.4;background:rgba(255,122,104,.05);padding:12px;border-radius:6px;border:1px solid rgba(255,122,104,.15);margin-bottom:12px;word-break:break-word"><strong style="color:#ff7a68">${msg}</strong></div>
+      <div style="font-size:10px;color:#8b9fac;margin-bottom:6px">DETAILS EN STACKTRACE (${type})</div>
+      <div style="font-size:9px;background:#040810;padding:12px;border-radius:6px;border:1px solid rgba(126,184,212,.2);overflow-x:auto;white-space:pre-wrap;color:#7eb8d4">${stack}</div>
+      <div style="font-size:9px;color:#8b9fac;margin-top:12px;word-break:break-all">babylon: ${bab} | glb-loader: ${glb}<br>${ua}</div>
+      <div id="btnCopyCrash" class="crash-btn"><span>KOPIEER RAPPORT</span><span style="color:#ff7a68;font-size:9px">(HOLD)</span></div>`;
+    const btn=document.getElementById('btnCopyCrash');
+    let holdTimer=null,aborted=false;
+    const report=`ZeeBeslag Foutrapport\nDatum: ${time}\nType: ${type}\nBabylon: ${bab}\nGLB-loader: ${glb}\n\nFout: ${msg}\n\nStacktrace:\n${stack}\n\nApparaat: ${ua}`;
+    const stop=e=>{aborted=true;clearTimeout(holdTimer);btn.style.transform='scale(1)';btn.style.opacity='1';try{btn.releasePointerCapture(e.pointerId);}catch(_){}};
+    btn.addEventListener('pointerdown',e=>{
+      btn.setPointerCapture(e.pointerId);aborted=false;btn.style.transform='scale(.94)';btn.style.opacity='.6';
+      holdTimer=setTimeout(()=>{
+        if(aborted)return;aborted=true;
+        const done=ok=>{btn.innerHTML=ok?'<span style="color:#7ee8b0">RAPPORT GEKOPIEERD</span>':'<span style="color:#ffcf6a">KOPIEREN MISLUKT</span>';};
+        if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(report).then(()=>done(true),()=>done(false));else done(false);
+      },500);
     });
-    btn.addEventListener('pointerup', stop);
-    btn.addEventListener('pointercancel', stop);
+    btn.addEventListener('pointerup',stop);
+    btn.addEventListener('pointercancel',stop);
   }
 </script>
 </body>
