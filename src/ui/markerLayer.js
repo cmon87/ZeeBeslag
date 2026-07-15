@@ -97,7 +97,7 @@ export class MarkerLayer {
     return e;
   }
 
-  update(cam, registry, active, shipPos, dt = 0.016, defenseNetwork = null) {
+  update(cam, registry, active, shipPos, dt = 0.016, defenseNetwork = null, mission = null) {
     if (!this._visible || !cam || !registry) return;
 
     this._now += Math.max(0, dt);
@@ -112,9 +112,13 @@ export class MarkerLayer {
     const tm = cam.getScene().getTransformMatrix();
     const fwd = cam.getDirection(BABYLON.Axis.Z);
     const ns = defenseNetwork ? defenseNetwork.status : null;
-    this._counter.innerHTML = `OBJECTIEVEN&nbsp; ${registry.objectiveRemaining} / ${registry.objectiveCount}`
-      + (ns ? `<br><span style="color:${ns.radarOperational ? CY : GY}">RADAR ${ns.radarOperational ? 'ACTIEF' : 'UIT'}</span>`
-      + ` &nbsp; <span style="color:${ns.supplyOperational ? AM : GY}">DEPOT ${ns.supplyOperational ? 'ACTIEF' : 'UIT'}</span>` : '');
+    this._counter.style.display = mission ? 'none' : '';
+    this._counter.innerHTML = mission
+      ? `VUURMISSIE&nbsp; ${Math.min(mission.objectiveIndex + 1, mission.objectiveTotal)} / ${mission.objectiveTotal}`
+        + `<br><span style="color:${AM}">${mission.phaseLabel || ''}</span>`
+      : `OBJECTIEVEN&nbsp; ${registry.objectiveRemaining} / ${registry.objectiveCount}`
+        + (ns ? `<br><span style="color:${ns.radarOperational ? CY : GY}">RADAR ${ns.radarOperational ? 'ACTIEF' : 'UIT'}</span>`
+        + ` &nbsp; <span style="color:${ns.supplyOperational ? AM : GY}">DEPOT ${ns.supplyOperational ? 'ACTIEF' : 'UIT'}</span>` : '');
 
     for (const emp of registry.list) {
       let e = this._entries.get(emp);
