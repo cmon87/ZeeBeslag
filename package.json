@@ -1,0 +1,14 @@
+{
+  "name": "zeebeslag",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node tools/zbcheck.mjs",
+    "test:phase1": "node tools/phase1_regression.mjs",
+    "test:phase2": "node tools/phase2_regression.mjs",
+    "test:phase3": "node tools/phase3_regression.mjs",
+    "test:phase4": "node tools/phase4_regression.mjs",
+    "test:phase5": "node tools/phase5_regression.mjs",
+    "test:ship-model": "node tools/ship_model_regression.mjs"
+  }
+}

@@ -1,0 +1,673 @@
+// src/main.js
+//
+// M2.9 - inslageffecten, drukgolf, slagvelddecor, alle atlaspaden in FX_PATHS.
+//
+// enemyShip is niet langer de spil. Het eiland is nu alleen nog terrein en camera-anker. De
+// doelen zijn losse Emplacements in een TargetRegistry. Ballistics vraagt het register om
+// trefferdetectie, MarkerLayer vraagt het om markers, MatchDirector vraagt het of alles kapot is.
+// Je kunt een doel toevoegen of weghalen zonder dit bestand te openen.
+//
+// Nieuw ook: de granaat heeft een springlading. Een inslag doet schade aan alles binnen
+// CFG.blastRadius, met kwadratische afval. Zonder splash zou artillerie met drie milliradiaan
+// spreiding een precisiespel zijn, en dat is precies wat artillerie niet is.
+//
+// Nog NIET gedaan (fase 3 en verder): eigen troepen, de vuursteun-wachtrij, kustbatterijen die
+// terugvuren, het vaarmodel en de rechter joystick, spotting (alle doelen staan nu op 'spotted').
+
+import { boot } from './core/engine.js';
+import { pushLog, updateDebugStats, stats, Debug, toggleHud } from './core/debug.js';
+import { setupBtn, joyState, altState } from './input/controls.js';
+import { WavesSettings } from './ocean/wavesSettings.js';
+import { WavesGenerator } from './ocean/wavesGenerator.js';
+import { buildOcean } from './ocean/oceanMaterial.js';
+import { WakeManager } from './ocean/wakeManager.js';
+import { PRESETS } from './ocean/presets.js';
+import { SwellField } from './game/swellField.js';
+import { Ship } from './game/ship.js';
+import { IslandTarget } from './game/islandTarget.js';
+import { ChaseCamera } from './game/chaseCamera.js';
+import { Ballistics, maxRange } from './game/ballistics.js';
+import { TargetRegistry } from './game/targetRegistry.js';
+import { BattleAmbience } from './game/battleAmbience.js';
+import { AtlasFX } from './game/atlasFx.js';
+import { HUD } from './game/hud.js';
+import { MarkerLayer } from './ui/markerLayer.js';
+import { Menu } from './game/menu.js';
+import { TurretRig } from './game/turretRig.js';
+import { CombatController } from './game/combatController.js';
+import { MatchDirector } from './game/matchDirector.js';
+import { OverlayUI } from './ui/overlayUI.js';
+import { DevPanel } from './ui/devPanel.js';
+import { SkyRig } from './environment/skyRig.js';
+import { TrajectoryRenderer } from './game/trajectoryRenderer.js';
+import { Telemetry } from './core/telemetry.js';
+
+export const BUILD = 'M3.1 een console, een export, gepoolde tracers';
+
+const FFT_SIZE     = 128;
+const SIM_HZ       = 30;
+const RENDER_SCALE = 0.6;
+const MAX_DPR      = 3;
+
+const MUZZLE_VELOCITY = 300;
+
+const CFG = {
+  shipHp:            100,
+  shipDamagePerHit:  3.2,     // schade aan het spelerschip, voor fase 5 (kustbatterijen)
+
+  shellDamage:       34,      // schade in het middelpunt van de springlading
+  blastRadius:       45,      // meter. Groter, want de spreiding groeit mee met de afstand:
+                              // 3,5 mrad is 6 m op 1760 m maar 16 m op 4640 m.
+
+  targetCount:       14,
+  targetSeed:        1337,
+  targetMinDist:     260,     // het eiland is nu 2880 bij 3851 m
+
+  roundsPerTurret:   3,
+  burstGap:          0.08,
+  fireCooldown:      1.4,
+
+  muzzleVelocity:    MUZZLE_VELOCITY,
+  playerSpreadMrad:  3.5,
+  enemySpreadMrad:   12,
+  aimReadyRad:       0.008,
+
+  enemyFireInterval: 1.75,
+
+  // Met de eilandtuning uit island_config.json is het eiland 2880 m diep (X, richting schip) en
+  // 3851 m breed (Z), 354 m hoog. Op de oude engageRange van 1680 lag de dichtste kust op 240
+  // meter van je boeg: je schip zou tegen een klif van driehonderd meter aan liggen.
+  //
+  // 3200 m geeft een standoff van 1760 m tot de dichtste kust; de verste doelen liggen op 4640 m.
+  // Ballistiek bij 300 m/s:  1760 m -> 5,5 gr, TOF 5,9 s
+  //                          3200 m -> 10,2 gr, TOF 10,8 s
+  //                          4640 m -> 15,2 gr, TOF 16,0 s
+  // Maximaal bereik blijft 9174 m, dus je haalt ook de achterkant van het eiland.
+  engageRange:       3200,
+
+  aimSpeed:          320,    // het speelveld is nu 4,6 km diep in plaats van 1,7
+  aimMinRange:       300,
+  aimMaxRange:       maxRange(MUZZLE_VELOCITY) * 0.92,
+
+  camStyle:          'doel',   // doel | kwart | hoog | brug. Zie chaseCamera.js
+  aiThrottle:        0.5,
+  aiRudderAmp:       0.5,
+  aiRudderRate:      0.15,
+
+  contactFoam:       1.0,
+  contactWidth:      6.0,
+  wakeStrength:      0.8,
+  wakeFlatten:       0.8,
+  wakeMinSpeed:      1.0,
+  wakeTau:           4.5,
+};
+
+Telemetry.init({ build: BUILD, cfg: CFG });
+Telemetry.bind({ Debug, joyState, altState, matchDirector: null });
+
+Debug.pushLog('BUILD', `ZeeBeslag ${BUILD} (v0=${CFG.muzzleVelocity}m/s blast=${CFG.blastRadius}m doelen=${CFG.targetCount})`, false);
+Debug.setBuild && Debug.setBuild(BUILD);
+
+const matchDirector = new MatchDirector(CFG);
+Telemetry.bind({ matchDirector });
+
+let history=['calm'], historyIndex=0;
+try{const s=localStorage.getItem('oceanFFTv7');if(s)history=JSON.parse(s);historyIndex=parseInt(localStorage.getItem('oceanFFTv7Idx')||'0');historyIndex=Math.min(historyIndex,history.length-1);}catch(_){}
+function saveState(id){history=history.slice(0,historyIndex+1);history.push(id);historyIndex=history.length-1;try{localStorage.setItem('oceanFFTv7',JSON.stringify(history));localStorage.setItem('oceanFFTv7Idx',String(historyIndex));}catch(_){}}
+
+Debug.setLoading(0, 'WebGPU initialiseren...');
+
+boot().then(async ({ engine, scene, cam, sun, isWebGPU }) => {
+
+  Debug.attachEngine(engine); Debug.registerScene(scene);
+
+  const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+  engine.setHardwareScalingLevel(1 / (dpr * RENDER_SCALE));
+  pushLog('PERF', `renderresolutie: ${RENDER_SCALE}x native (DPR ${dpr.toFixed(2)})`, false);
+
+  Debug.setLoading(15, isWebGPU ? 'WebGPU actief' : 'WebGL2 fallback');
+
+  if (!isWebGPU) {
+    Debug.fatal(new Error('Geen WebGPU op dit toestel/deze browser. ComputeShader vereist, dus de oceaan kan niet laden.'),
+      { title:'WebGPU vereist', phase:'engine-init', tag:'ENGINE' });
+    return;
+  }
+
+  scene.skipPointerMovePicking = true;
+
+  let oceanRig = null, wavesGen = null, wavesSettings = null, wakeManager = null, skyRig = null;
+  const swell = new SwellField();
+  let playerShip = null, island = null, chaseCam = null, ballistics = null, fx = null, combatController = null;
+  let registry = null, markers = null, battle = null;
+  let hud = null, menu = null, turretRig = null, trajectoryRenderer = null;
+
+  let aimCursor = null;
+  let activeTarget = null;
+  const playerAimTarget = new BABYLON.Vector3(CFG.engageRange, 0, 0);
+
+  const _camFwd = new BABYLON.Vector3();
+  const _camRight = new BABYLON.Vector3();
+  const _hudPos = new BABYLON.Vector3();
+  const _noTarget = { hp: 0, maxHp: 1, alive: false, root: { position: new BABYLON.Vector3(CFG.engageRange, 0, 0) } };
+
+  function initGame() {
+    playerShip = new Ship(scene, swell, { position: new BABYLON.Vector3(0, 0, 0), heading: 0, maxHp: CFG.shipHp });
+    island     = new IslandTarget(scene, { position: new BABYLON.Vector3(CFG.engageRange, 0, 0) });
+
+    playerShip.addTurret(new BABYLON.Vector3(0, 6.5,  17), { barrel: 6, muzzleY: 1.2 });
+    playerShip.addTurret(new BABYLON.Vector3(0, 6.5,   2), { barrel: 6, muzzleY: 1.2 });
+    playerShip.addTurret(new BABYLON.Vector3(0, 6.5, -13), { barrel: 6, muzzleY: 1.2 });
+
+    chaseCam = new ChaseCamera(cam, playerShip, { enemy: island, style: CFG.camStyle });
+    ballistics = new Ballistics(scene, swell);
+    combatController = new CombatController(CFG, swell);
+    trajectoryRenderer = new TrajectoryRenderer(scene, ballistics, swell);
+    registry = new TargetRegistry(scene);
+    markers = new MarkerLayer();
+
+    ballistics.addTarget(playerShip, 32);
+    ballistics.setTerrain(island);
+    ballistics.setRegistry(registry);
+
+    registry.onDestroyed = (emp) => {
+      pushLog('GAME', `${emp.id} ${emp.label} vernietigd  (${registry.aliveCount}/${registry.total} over)`, false);
+      if (fx) { _hudPos.copyFrom(emp.root.position); _hudPos.y += 2; fx.emplacementDestroyed(_hudPos.clone()); }
+      if (navigator.vibrate) navigator.vibrate([25, 40, 25]);
+    };
+    registry.onAllDestroyed = () => matchDirector.onObjectiveComplete();
+
+    fx = new AtlasFX(scene);   // alle acht atlaspaden staan in FX_PATHS in atlasFx.js
+    fx.setMuzzleChannels(playerShip.turrets.length);
+
+    aimCursor = BABYLON.MeshBuilder.CreateGround('aimCursor', { width: 170, height: 170 }, scene);
+    const aimMat = new BABYLON.StandardMaterial('aimMat', scene);
+    aimMat.emissiveColor = new BABYLON.Color3(1.0, 0.25, 0.2);
+    aimMat.alpha = 0.6;
+    aimMat.wireframe = true;
+    aimMat.disableLighting = true;
+    aimCursor.material = aimMat;
+    aimCursor.isPickable = false;
+    aimCursor.position.copyFrom(playerAimTarget);
+
+    const aimPole = BABYLON.MeshBuilder.CreateCylinder('aimPole', { height: 130, diameter: 2.4, tessellation: 6 }, scene);
+    aimPole.material = aimMat;
+    aimPole.isPickable = false;
+    aimPole.parent = aimCursor;
+    aimPole.position.y = 65;
+
+    matchDirector.bind({ cam, playerShip, enemyShip: island, chaseCam, ballistics, combatController, fx, registry, markers });
+    matchDirector.placeCinematicCam();
+
+    scene.fogMode = BABYLON.Scene.FOGMODE_EXP2;
+    // 2,6e-4 liet op 4640 m nog maar 23 procent van het doel door. 1,6e-4 geeft 92 / 77 / 58
+    // procent transmissie op respectievelijk 1760, 3200 en 4640 meter. De inslagatlassen staan
+    // los daarvan op fogEnabled = false; zie atlasFx.js.
+    scene.fogDensity = 1.6e-4;
+    scene.fogColor = new BABYLON.Color3(0.62, 0.75, 0.90);
+
+    // Alle inslagen op of bij het eiland detoneren met dezelfde springlading. Het verschil tussen
+    // een directe treffer en een inslag ernaast zit alleen in de afstand tot het middelpunt.
+    function detonate(pos) {
+      if (markers) markers.duckAt(pos);   // markers uit de weg, je wilt de inslag zien
+      if (matchDirector.gameOver || matchDirector.mode === 'regie') return;
+      registry.applyBlast(pos, CFG.shellDamage, CFG.blastRadius);
+    }
+
+    ballistics.onImpactWater  = pos => { fx.waterImpact(pos); };
+    ballistics.onImpactGround = pos => { fx.shipShatter(pos); detonate(pos); };
+    ballistics.onImpactTarget = (emp, pos) => { fx.shipShatter(pos); detonate(pos); };
+
+    ballistics.onImpactShip = (ship, pos) => {
+      if (ship !== playerShip) { fx.shipShatter(pos); return; }
+      if (matchDirector.mode === 'regie' || matchDirector.gameOver) return;
+      if (matchDirector.godMode) { pushLog('BAL', 'TREFFER op speler geblokkeerd (godmode)', false); return; }
+
+      const sank = ship.damage(CFG.shipDamagePerHit);
+      if (hud) hud.damageFlash();
+      pushLog('BAL', `TREFFER op speler (hp ${ship.hp})`, false);
+      if (sank) matchDirector.onShipSank(ship);
+    };
+
+    pushLog('GAME', 'Artillerie-opstelling geinitialiseerd', false);
+
+    // Telemetrie: alles binden en de wikkels aanbrengen NA het toewijzen van de callbacks.
+    Telemetry.bind({
+      engine, scene, cam, playerShip, island, ballistics, combatController,
+      registry, markers, chaseCam, fx, hud: null,
+      getSimTime: () => simTime,
+      getOceanTime: () => oceanTime,
+      getAimTarget: () => playerAimTarget,
+    });
+    Telemetry.instrument();
+
+    playerShip.loadGLB('./models/', 'Schip1.glb')
+      .then(r => {
+        pushLog('GLB', `Schip1.glb geladen: ${r.meshCount} meshes, ${r.turretsBound} turrets gekoppeld`, r.turretsBound === 0);
+        Telemetry.event('glb', { bestand: 'Schip1.glb', meshes: r.meshCount, turrets: r.turretsBound });
+        try { turretRig = new TurretRig(scene, playerShip, pushLog, cam); }
+        catch (e) { pushLog('RIG', 'turret-rig init faalde', true); }
+      })
+      .catch(e => { pushLog('GLB', 'Schip1.glb laden mislukt: ' + (e.message || e), true); Telemetry.event('glbFout', { bestand: 'Schip1.glb', msg: String(e.message || e) }); });
+
+    island.loadGLB('./models/land/', 'ocean_rocky_island.glb')
+      .then(r => {
+        pushLog('GLB', `eiland geladen, voetafdruk r=${Math.round(r.hitRadius)}m`, false);
+        if (r.bake) {
+          pushLog('TERRA', `heightmap ${r.bake.res}x${r.bake.res} (${r.bake.meterPerTexel} m/texel) uit ${r.bake.vertices} vertices in ${r.bake.ms} ms, span ${r.bake.span}m, hoogte ${r.bake.hoogte}m`, false);
+          if (!r.bake.dekt) pushLog('TERRA', `heightmap dekt de eilandpositie ${r.bake.root} NIET. Wereldmatrices klopten niet bij de bake.`, true);
+        }
+        const n = registry.scatter(island, {
+          count: CFG.targetCount, seed: CFG.targetSeed, minDist: CFG.targetMinDist,
+        });
+        pushLog('GAME', `${n} verdedigingswerken geplaatst`, n < CFG.targetCount);
+        if (n < CFG.targetCount) pushLog('GAME', 'te weinig plek boven de waterlijn: verlaag targetMinDist of verhoog de eiland-schaal', true);
+
+        // Fictieve grondstrijd. Twee linies, tracers, mondingsflitsen, brandhaarden.
+        battle = new BattleAmbience(scene, island, fx, { seed: CFG.targetSeed + 7 });
+        const sites = battle.build();
+        pushLog('GAME', `slagvelddecor: ${sites} stellingen`, sites < 8);
+        Telemetry.bind({ battle });
+      })
+      .catch(e => pushLog('GLB', 'eiland laden mislukt: ' + (e.message || e), true));
+  }
+
+  function buildMenu() {
+    menu = new Menu({
+      onPreset: id => applyState(id),
+      onUndo:  () => { if (historyIndex > 0) applyState(history[--historyIndex], false); },
+      onRedo:  () => { if (historyIndex < history.length - 1) applyState(history[++historyIndex], false); },
+      onMode:  m => matchDirector.setMode(m),
+      onTime:  s => matchDirector.setTimeScale(s),
+      onGod:   () => matchDirector.toggleGodMode(),
+      onFilm:  () => matchDirector.toggleFilmLook(),
+      onReset: () => matchDirector.resetMatch(),
+      onDebugLog: () => toggleHud(),
+      onTurretRig: () => { if (turretRig) turretRig.toggle(); },
+      onToggleTuner: () => { if (island) island.toggleTuner(); },
+      onSpawnMove: (modeOption) => {
+        if (!playerShip) return;
+        const newPos = new BABYLON.Vector3(0, 0, 0);
+        if (modeOption === 'left')  newPos.set(CFG.engageRange * 0.4, 0,  CFG.engageRange * 0.5);
+        if (modeOption === 'right') newPos.set(CFG.engageRange * 0.4, 0, -CFG.engageRange * 0.5);
+
+        playerShip.respawn(newPos, 0);
+        playerAimTarget.copyFrom(island ? island.root.position : newPos);
+        if (ballistics) ballistics.clear();
+      },
+      getState: () => ({
+        preset: history[historyIndex] || 'calm',
+        canUndo: historyIndex > 0,
+        canRedo: historyIndex < history.length - 1,
+        mode: matchDirector.mode,
+        god: matchDirector.godMode,
+        timeScale: matchDirector.timeScale,
+        film: matchDirector.filmLook,
+      }),
+    });
+  }
+
+  function buildWorld() {
+    Debug.setLoading(40, 'Oceaan opbouwen...');
+    try {
+      oceanRig = buildOcean(scene, engine, null);
+      oceanRig.ocean.alwaysSelectAsActiveMesh = true;
+      oceanRig.ocean.doNotSyncBoundingInfo = true;
+      oceanRig.ocean.isPickable = false;
+
+      try {
+        const dr = scene.enableDepthRenderer(cam, false);
+        oceanRig.mat.setTexture('uDepthTex', dr.getDepthMap());
+        oceanRig.mat.setFloat('uCamFar', cam.maxZ);
+        oceanRig.mat.setFloat('uContactFoam', CFG.contactFoam);
+        oceanRig.mat.setFloat('uContactWidth', CFG.contactWidth);
+      } catch (e) {}
+
+      try { wakeManager = new WakeManager(scene, oceanRig, CFG); } catch (e) {}
+
+      Debug.setRenderViewHandler(m => { if (oceanRig) oceanRig.mat.setFloat('uDebugView', m); });
+      wavesSettings = new WavesSettings();
+      wavesGen = new WavesGenerator(FFT_SIZE, wavesSettings, engine, { deferInitialBake: true });
+
+      applyState(history[historyIndex] || 'calm', false);
+      if (!wavesGen.baked) wavesGen.rebake();
+
+      const c0 = wavesGen.getCascade(0), c1 = wavesGen.getCascade(1), c2 = wavesGen.getCascade(2);
+      oceanRig.mat.setTexture('uDisp0', c0.displacement); oceanRig.mat.setTexture('uDisp1', c1.displacement); oceanRig.mat.setTexture('uDisp2', c2.displacement);
+      oceanRig.mat.setTexture('uDeriv0', c0.derivatives); oceanRig.mat.setTexture('uDeriv1', c1.derivatives); oceanRig.mat.setTexture('uDeriv2', c2.derivatives);
+      oceanRig.mat.setTexture('uTurb0', c0.turbulence); oceanRig.mat.setTexture('uTurb1', c1.turbulence); oceanRig.mat.setTexture('uTurb2', c2.turbulence);
+      oceanRig.mat.setFloat('uLen0', wavesGen.lengthScale[0]);
+      oceanRig.mat.setFloat('uLen1', wavesGen.lengthScale[1]);
+      oceanRig.mat.setFloat('uLen2', wavesGen.lengthScale[2]);
+
+      skyRig = new SkyRig(scene, sun);
+      skyRig.build();
+      skyRig.applySky(oceanRig);
+
+      initGame();
+      hud = new HUD();
+      buildMenu();
+
+      matchDirector.bind({ hud, menu });
+      matchDirector.setMode(matchDirector.mode);
+
+      new OverlayUI(matchDirector);
+
+      // ── DE ENIGE technische console. Modules bouwen geen knoppen meer, ze registreren zich.
+      DevPanel.mount();
+
+      DevPanel.tool({ id: 'tuner', label: 'Eiland tuner', hint: 'sleepbaar', onTap: () => island && island.toggleTuner() });
+      DevPanel.tool({ id: 'rig', label: 'Turret rig', hint: 'kalibratie', onTap: () => turretRig && turretRig.toggle() });
+      DevPanel.tool({ id: 'diag', label: 'Oceaan-diagnose draaien', onTap: () => Debug.runDiag(wavesGen) });
+
+      DevPanel.toggle({ id: 'god', label: 'Godmode', get: () => matchDirector.godMode, set: () => matchDirector.toggleGodMode() });
+      DevPanel.toggle({ id: 'film', label: 'WO2 filmlook', get: () => matchDirector.filmLook, set: () => matchDirector.toggleFilmLook() });
+      DevPanel.toggle({ id: 'decor', label: 'Slagvelddecor', get: () => !!(battle && battle.enabled), set: (v) => battle && battle.setEnabled(v) });
+      DevPanel.cycle({ id: 'zee', label: 'Oceaan renderweergave', names: Debug.renderViewNames,
+                       get: () => Debug.getRenderView(), set: (i) => Debug.setRenderView(i) });
+
+      DevPanel.exportItem({ id: 'island', label: 'Eiland-config (JSON)', hint: 'tuner', run: () => island && island.exportConfigJSON() });
+      DevPanel.exportItem({ id: 'targets', label: 'Doelen (JSON)', hint: 'scatter', run: () => registry && registry.exportJSON() });
+
+      Telemetry.bind({ wavesGen, hud, menu });
+      Debug.setDiagTarget(wavesGen);
+      Debug.loadingDone();
+      setTimeout(() => Debug.runDiag(wavesGen), 3000);
+    } catch (err) {
+      Debug.fatal(err, { title:'Oceaan-init mislukt', phase:'wavesGenerator', tag:'FFT' });
+    }
+  }
+  buildWorld();
+
+  // Additieve sprites (mondingsflits, vuurbal, drukgolf) staan op renderingGroupId 1. Babylon
+  // wist daar standaard de dieptebuffer, waardoor ze niet meer door geometrie worden afgesneden.
+  // Dat is de losse rechte rand die je door de mondingsflits zag lopen.
+  scene.setRenderingAutoClearDepthStencil(1, true, true, false);
+
+  // ── GEEN DefaultRenderingPipeline ──────────────────────────────────────────────
+  // Op de Adreno 830 onder WebGPU (Babylon 9.14) bouwt ELKE post-process pass van de
+  // DefaultRenderingPipeline een invalid render-pipeline. We zagen achtereenvolgens
+  // imageProcessing, highlights en sharpen crashen, allemaal met
+  //   "RenderPipeline ... is invalid due to a previous error".
+  // Vanaf het eerste kapotte frame faalt elke render en wordt het scherm zwart, terwijl de
+  // render-loop op 60 fps blijft draaien. De HUD is DOM-overlay en overleeft, vandaar zwart
+  // beeld met levende HUD.
+  //
+  // Oplossing: helemaal geen post-process pipeline. De volledige beeldbewerking draait op
+  // scene-niveau via scene.imageProcessingConfiguration met applyByPostProcess = false, dus de
+  // materialen doen tonemapping, contrast, exposure, vignette en colorCurves zelf in hun forward
+  // pass. Geen enkele post-process pass, dus niets meer dat kan crashen.
+  //
+  // Wat je inlevert: bloom, sharpen en FXAA. Die zaten alle drie in de crashende pipeline. De
+  // ACES-look en de WO2-filmlook blijven volledig, want die zitten in de forward pass.
+  const ipc = scene.imageProcessingConfiguration;
+  ipc.applyByPostProcess = false;
+  ipc.toneMappingEnabled = true;
+  ipc.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+  ipc.contrast = 1.05;
+  ipc.exposure = 1.15;
+  ipc.vignetteEnabled = true;
+  ipc.vignetteWeight = 1.4;
+
+  // matchDirector.applyFilmLook praat tegen refs.pipeline.imageProcessing. We geven hem een
+  // klein doorgeefluik dat naar de scene-config wijst, zodat de filmlook-toggle werkt zonder
+  // enige post-process. Zelfde config-object, dus dezelfde look.
+  const pipeline = { imageProcessing: scene.imageProcessingConfiguration };
+
+  matchDirector.bind({ pipeline });
+  matchDirector.applyFilmLook();
+
+  function applyState(id, write=true) {
+    const p = PRESETS[id]; if(!p) return;
+    if (wavesSettings && wavesGen) {
+      wavesSettings.lambda = p.lambda;
+      wavesSettings.local.windSpeed = p.windSpeed;
+      wavesSettings.local.fetch = p.fetch;
+      wavesSettings.local.windDirection = p.windDir;
+      wavesSettings.swell.windSpeed = p.windSpeed * 0.7;
+      wavesSettings.swell.fetch = p.fetch * 1.6;
+      wavesSettings.swell.windDirection = p.windDir + 15;
+      wavesGen.rebake();
+      swell.setFromPreset(p.windSpeed, p.fetch, p.windDir);
+      if (fx) {
+        const wr = p.windDir * Math.PI / 180;
+        fx.setWind(new BABYLON.Vector3(Math.sin(wr) * p.windSpeed * 0.06, 0, Math.cos(wr) * p.windSpeed * 0.06));
+      }
+      if (oceanRig && oceanRig.mat && p.foam !== undefined) oceanRig.mat.setFloat('uFoamScale', 2.4 * p.foam);
+    }
+    if (write) saveState(id);
+    if (menu) menu.refresh();
+  }
+
+  function tryFireSalvo() {
+    if (!combatController || !playerShip) { pushLog('VUUR', 'geweigerd: geen schip of vuurleiding', true); return; }
+    if (matchDirector.gameOver)          { pushLog('VUUR', 'geweigerd: gameOver', false); return; }
+    if (matchDirector.mode === 'free')   { pushLog('VUUR', 'geweigerd: vrije camera', false); return; }
+    if (matchDirector.timeScale === 0)   { pushLog('VUUR', 'geweigerd: spel staat op pauze, druk op PLAY', false); return; }
+
+    const ok = combatController.fireSalvo(simTime, playerShip);
+    pushLog('VUUR', ok
+      ? `salvo: ${playerShip.turrets.length} torens x ${CFG.roundsPerTurret} granaten`
+      : `geweigerd: herladen (${(CFG.fireCooldown - (simTime - combatController.lastFireT)).toFixed(2)}s)`, false);
+    if (ok && navigator.vibrate) navigator.vibrate(35);
+  }
+  setupBtn(document.getElementById('btnFire'), tryFireSalvo);
+
+  function updateAim(dts) {
+    const jx = joyState.left.x, jy = joyState.left.y;
+    const mag = Math.hypot(jx, jy);
+
+    if (mag > 0.01) {
+      _camFwd.copyFrom(cam.getDirection(BABYLON.Axis.Z)); _camFwd.y = 0;
+      if (_camFwd.lengthSquared() < 1e-6) _camFwd.set(0, 0, 1);
+      _camFwd.normalize();
+      _camRight.copyFrom(cam.getDirection(BABYLON.Axis.X)); _camRight.y = 0;
+      if (_camRight.lengthSquared() < 1e-6) _camRight.set(1, 0, 0);
+      _camRight.normalize();
+
+      const gain = CFG.aimSpeed * Math.pow(Math.min(mag, 1), 1.6) * dts / mag;
+      const sx = jx * gain, sf = -jy * gain;
+      playerAimTarget.x += _camRight.x * sx + _camFwd.x * sf;
+      playerAimTarget.z += _camRight.z * sx + _camFwd.z * sf;
+    }
+
+    const p = playerShip.root.position;
+    let dx = playerAimTarget.x - p.x, dz = playerAimTarget.z - p.z;
+    let d = Math.hypot(dx, dz);
+    if (d < 1e-3) { dx = 1; dz = 0; d = 1; }
+    const clamped = Math.max(CFG.aimMinRange, Math.min(CFG.aimMaxRange, d));
+    if (clamped !== d) {
+      playerAimTarget.x = p.x + dx / d * clamped;
+      playerAimTarget.z = p.z + dz / d * clamped;
+    }
+
+    const gh = island ? island.sample(playerAimTarget.x, playerAimTarget.z) : null;
+    playerAimTarget.y = (gh !== null && gh !== undefined) ? gh : swell.getHeight(playerAimTarget.x, playerAimTarget.z);
+  }
+
+  let wakeLock = null;
+  async function keepAwake(){ try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch(_) {} }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+  keepAwake();
+  if (location.hash !== '#dev') {
+    const goFullscreen = async () => {
+      document.removeEventListener('pointerdown', goFullscreen);
+      try { await document.documentElement.requestFullscreen({ navigationUI: 'hide' }); } catch(_) {}
+      try { if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape'); } catch(_) {}
+    };
+    document.addEventListener('pointerdown', goFullscreen, { once: true });
+  }
+
+  let simTime = 0, lastT = performance.now(), lastStats = 0;
+  let oceanTime = 0;
+  let simAccum = 0;
+  const SIM_STEP = 1 / SIM_HZ;
+
+  Debug.setStatusProvider(() => [
+    `preset: ${history[historyIndex]}`,
+    `modus: ${matchDirector.mode}  tijd: ${matchDirector.timeScale === 0 ? 'STOP' : matchDirector.timeScale + 'x'}`,
+    `backend: ${isWebGPU?'WebGPU':'WebGL2'} render: ${RENDER_SCALE}x`,
+    `sim: ${simTime.toFixed(1)}s  oceaan: ${oceanTime.toFixed(1)}s`,
+    ...(playerShip ? [
+      `v0: ${CFG.muzzleVelocity} m/s  maxbereik: ${Math.round(CFG.aimMaxRange)} m`,
+      `mikpunt: ${playerAimTarget.x.toFixed(0)},${playerAimTarget.z.toFixed(0)}`,
+      `elevatie t0: ${(playerShip.turrets[0] ? playerShip.turrets[0].elev * 57.2958 : 0).toFixed(1)} graden`,
+      `actief doel: ${activeTarget ? activeTarget.id + ' ' + activeTarget.label + ' hp ' + Math.round(activeTarget.hp) : '-'}`,
+      `doelen: ${registry ? registry.aliveCount + '/' + registry.total : '-'}`,
+      `projectielen: ${ballistics ? ballistics.projectiles.length : 0}`,
+      `hp speler: ${playerShip.hp}`,
+    ] : []),
+  ]);
+
+  engine.runRenderLoop(() => {
+    const now = performance.now();
+    const dt = Math.min(now - lastT, 80);
+    lastT = now; stats.frameCount++;
+    const dts = dt * 0.001;
+    const cdt = dts * matchDirector.timeScale;
+    simTime += cdt;
+    oceanTime += dts;
+
+    Telemetry.frame(dt);
+
+    stats.fpsHistory.push(dt); if (stats.fpsHistory.length > 60) stats.fpsHistory.shift();
+    stats.currentFps = 1000 / (stats.fpsHistory.reduce((a,b)=>a+b,0) / stats.fpsHistory.length);
+    if (dt > 200 && stats.frameCount > 120) stats.gpuWarnCount++;
+
+    if (wavesGen) {
+      simAccum += dts;
+      if (simAccum >= SIM_STEP) {
+        try { wavesGen.update(simAccum); } catch(err) {}
+        if (oceanRig) {
+          oceanRig.mat.setTexture('uTurb0', wavesGen.getCascade(0).turbulence);
+          oceanRig.mat.setTexture('uTurb1', wavesGen.getCascade(1).turbulence);
+          oceanRig.mat.setTexture('uTurb2', wavesGen.getCascade(2).turbulence);
+        }
+        simAccum = 0;
+      }
+    }
+
+    swell.update(oceanTime);
+
+    let aimReady = false;
+    let aimTarget = null;
+
+    if (playerShip) {
+      if (matchDirector.mode === 'ship') {
+        playerShip.throttle = 0; playerShip.rudder = 0;
+        updateAim(dts);
+        aimTarget = playerAimTarget;
+        if (aimCursor) { aimCursor.position.copyFrom(playerAimTarget); aimCursor.setEnabled(true); }
+
+      } else if (matchDirector.mode === 'regie') {
+        matchDirector.aiDrive(playerShip, cdt);
+        aimTarget = activeTarget ? activeTarget.root.position : (island ? island.root.position : null);
+        if (aimCursor) aimCursor.setEnabled(false);
+
+      } else {
+        playerShip.throttle = 0; playerShip.rudder = 0;
+        if (aimCursor) aimCursor.setEnabled(false);
+      }
+
+      // Actief doel: het levende werk dat het dichtst bij het dradenkruis ligt. Geen doelselectie-UI.
+      if (registry) {
+        const ref = (matchDirector.mode === 'ship') ? playerAimTarget : playerShip.root.position;
+        activeTarget = registry.nearestAlive(ref);
+      }
+
+      if (aimTarget && !(turretRig && turretRig.enabled)) {
+        playerShip.aimTurretsAt(aimTarget, cdt, CFG.muzzleVelocity);
+      }
+      if (aimTarget && combatController) {
+        aimReady = combatController.playerAimReady(playerShip, aimTarget);
+      }
+
+      playerShip.update(cdt);
+      if (matchDirector.timeScale === 0 && playerShip.floatOnly) playerShip.floatOnly(dts);
+    }
+
+    if (island) island.update(cdt);
+    if (battle) battle.update(cdt);
+
+    if (combatController) combatController.update(cdt, simTime, playerShip, null, ballistics, fx, matchDirector.gameOver);
+    if (wakeManager) wakeManager.update(cdt, playerShip, null);
+    if (ballistics) ballistics.update(cdt);
+
+    if (trajectoryRenderer) {
+      if (matchDirector.mode === 'ship' && playerShip && playerShip.alive) {
+        trajectoryRenderer.update(playerShip, CFG.muzzleVelocity, aimReady);
+      } else {
+        trajectoryRenderer.hide();
+      }
+    }
+
+    // Ook in regie volgen. Alleen in 'free' blijft de camera staan waar placeCinematicCam hem zet.
+    if (chaseCam && (matchDirector.mode === 'ship' || matchDirector.mode === 'regie')
+        && !(turretRig && turretRig.enabled)) chaseCam.update(dts);
+
+    if (oceanRig) {
+      oceanRig.ocean.position.x = cam.position.x;
+      oceanRig.ocean.position.z = cam.position.z;
+      oceanRig.mat.setVector3('uCamPos', cam.position);
+      oceanRig.mat.setFloat('uTime', oceanTime);
+    }
+
+    if (skyRig) skyRig.update(cam.position);
+
+    scene.render();
+
+    if (markers && playerShip) markers.update(cam, registry, activeTarget, playerShip.root.position, dts);
+
+    if (hud && playerShip) {
+      const t = activeTarget || _noTarget;
+      const e = t.root.position;
+      _hudPos.set(e.x, e.y + 14, e.z);
+      const range = Math.hypot(e.x - playerShip.root.position.x, e.z - playerShip.root.position.z);
+
+      hud.update({
+        camera: cam,
+        playerHp: playerShip.hp, playerMax: playerShip.maxHp,
+        enemyHp: t.hp, enemyMax: t.maxHp,
+        enemyPos: _hudPos, enemyAlive: !!t.alive,
+        range,
+        aimReady,
+        fireReady: combatController ? combatController.getFireReady(simTime) : 0,
+      });
+    }
+
+    if (now - lastStats > 1000) {
+      lastStats = now;
+      updateDebugStats();
+
+    }
+  });
+
+  let resT;
+  window.addEventListener('resize', ()=>{ clearTimeout(resT); resT=setTimeout(()=>engine.resize(),150); });
+  window.addEventListener('beforeunload', () => {
+    try {
+      if (wakeLock) wakeLock.release().catch(()=>{});
+      if (hud) hud.dispose();
+      if (markers) markers.dispose();
+      if (menu) menu.dispose();
+      if (turretRig) turretRig.dispose();
+      if (ballistics) ballistics.dispose();
+      if (fx) fx.dispose();
+      if (battle) battle.dispose();
+      if (registry) registry.dispose();
+      if (wavesGen) wavesGen.dispose();
+      if (wakeManager) wakeManager.dispose();
+      if (trajectoryRenderer) trajectoryRenderer.dispose();
+      if (skyRig) skyRig.dispose();
+      if (oceanRig) { if (oceanRig.envPlaceholder) oceanRig.envPlaceholder.dispose(); oceanRig.mat.dispose(); oceanRig.ocean.dispose(); }
+      scene.dispose(); engine.dispose();
+    } catch(_) {}
+  });
+
+  // Handig voor het verfijnen van de indeling: exporteer wat scatter() heeft geplaatst,
+  // pas het met de hand aan, en laad het terug met registry.loadJSON(json).
+  window.zbExportTargets = () => registry && registry.exportJSON();
+  window.zbCam = (n) => chaseCam && chaseCam.setStyle(n, true);   // 'doel','kwart','hoog','brug'
+
+}).catch(err => {
+  Debug.fatal(err, { title:'Opstartfout', phase:'boot', tag:'BOOT' });
+});
