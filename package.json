@@ -4,11 +4,17 @@
   "type": "module",
   "scripts": {
     "check": "node tools/zbcheck.mjs",
+    "vendor": "node tools/vendor-babylon.mjs",
+    "build": "node tools/build-production.mjs",
+    "build:offline": "node tools/build-production.mjs --offline",
+    "validate:dist": "node tools/validate-production.mjs",
     "test:phase1": "node tools/phase1_regression.mjs",
     "test:phase2": "node tools/phase2_regression.mjs",
     "test:phase3": "node tools/phase3_regression.mjs",
     "test:phase4": "node tools/phase4_regression.mjs",
     "test:phase5": "node tools/phase5_regression.mjs",
-    "test:ship-model": "node tools/ship_model_regression.mjs"
+    "test:phase6": "node tools/phase6_regression.mjs",
+    "test:ship-model": "node tools/ship_model_regression.mjs",
+    "test:all": "npm run check && npm run test:phase1 && npm run test:ship-model && npm run test:phase2 && npm run test:phase3 && npm run test:phase4 && npm run test:phase5 && npm run test:phase6"
   }
 }
