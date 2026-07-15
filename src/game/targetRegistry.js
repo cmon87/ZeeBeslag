@@ -20,10 +20,10 @@ export class TargetRegistry {
   constructor(scene) {
     this._scene = scene;
     this.list = [];
-    this.onDestroyed = null;          // (emplacement) => void
-    this.onSpotted = null;            // (emplacement, source) => void
-    this.onObjectiveComplete = null;  // () => void
-    this.onAllDestroyed = null;       // compatibiliteitsalias
+    this.onDestroyed = null;
+    this.onSpotted = null;
+    this.onObjectiveComplete = null;
+    this.onAllDestroyed = null;
     this._objectiveCompletedNotified = false;
     this._tmp = new BABYLON.Vector3();
   }
@@ -54,6 +54,10 @@ export class TargetRegistry {
   get objectiveRemaining() { let n = 0; for (const e of this.list) if (e.objective !== false && e.alive) n++; return n; }
   get objectiveComplete() { return this.objectiveCount > 0 && this.objectiveRemaining === 0; }
 
+  _interactive(e) {
+    return !!e && (!e.missionControlled || e.missionState === 'active');
+  }
+
   typeCounts(aliveOnly = false) {
     const out = Object.create(null);
     for (const e of this.list) {
@@ -70,11 +74,10 @@ export class TargetRegistry {
     return changed;
   }
 
-  // Directe treffer op een werk: de granaat detoneert op de bunker zelf.
   hitTest(pos, owner) {
     for (let i = 0; i < this.list.length; i++) {
       const e = this.list[i];
-      if (e === owner || !e.alive) continue;
+      if (e === owner || !e.alive || !this._interactive(e)) continue;
       const dx = pos.x - e.root.position.x;
       const dy = pos.y - (e.root.position.y + (e.visibilityHeight ?? 12));
       const dz = pos.z - e.root.position.z;
@@ -83,12 +86,11 @@ export class TargetRegistry {
     return null;
   }
 
-  // Exacte segment-boltest voor snelle granaten.
   hitTestSegment(from, to, owner, tMin = 0) {
     let best = null;
     for (let i = 0; i < this.list.length; i++) {
       const e = this.list[i];
-      if (!e || e === owner || !e.alive || !e.root) continue;
+      if (!e || e === owner || !e.alive || !e.root || !this._interactive(e)) continue;
       this._tmp.set(
         e.root.position.x,
         e.root.position.y + (e.visibilityHeight ?? 12),
@@ -100,13 +102,12 @@ export class TargetRegistry {
     return best;
   }
 
-  // Springlading. Kwadratische afval tot nul op de rand.
   applyBlast(pos, damage, radius) {
     const r2 = radius * radius;
     let killed = 0;
     for (let i = 0; i < this.list.length; i++) {
       const e = this.list[i];
-      if (!e.alive) continue;
+      if (!e.alive || !this._interactive(e)) continue;
       const dx = pos.x - e.root.position.x;
       const dy = pos.y - (e.root.position.y + (e.visibilityHeight ?? 10));
       const dz = pos.z - e.root.position.z;
@@ -134,7 +135,7 @@ export class TargetRegistry {
     let best = null, bestD = maxDist * maxDist;
     for (let i = 0; i < this.list.length; i++) {
       const e = this.list[i];
-      if (!e.alive || e.state === 'unknown') continue;
+      if (!e.alive || e.state === 'unknown' || !this._interactive(e)) continue;
       const dx = pos.x - e.root.position.x, dz = pos.z - e.root.position.z;
       const d2 = dx * dx + dz * dz;
       if (d2 < bestD) { bestD = d2; best = e; }
@@ -191,8 +192,6 @@ export class TargetRegistry {
     return this.list.length;
   }
 
-  // Procedureel plaatsen op de gebakken eiland-heightmap. De profielen bepalen HP en gedrag;
-  // scatter overschrijft die waarden niet meer met één generieke hp=100.
   scatter(island, opts = {}) {
     const count   = opts.count ?? 14;
     const seed    = opts.seed ?? 1337;
