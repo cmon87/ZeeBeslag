@@ -100,6 +100,9 @@ export class Emplacement {
     this.canFire = config.canFire ?? this.profile.canFire;
     this.visibilityHeight = config.visibilityHeight ?? this.profile.visibilityHeight;
     this.damageTakenMultiplier = config.damageTakenMultiplier ?? this.profile.damageTakenMultiplier ?? 1;
+    this.missionControlled = config.missionControlled === true;
+    this.missionState = this.missionControlled ? (config.missionState || 'inactive') : 'active';
+    this._initialMissionState = this.missionState;
     this._disposed = false;
 
     this.root = new BABYLON.TransformNode('emp_' + this.id, scene);
@@ -112,7 +115,6 @@ export class Emplacement {
     this.alive = true;
     this.radius = config.radius ?? this.profile.radius;
 
-    // AI-eigenschappen zijn per type te tunen en kunnen via JSON worden overschreven.
     this.engageRange = config.engageRange ?? this.profile.engageRange ?? 0;
     this.visualRange = config.visualRange ?? this.profile.visualRange ?? 0;
     this.fireInterval = config.fireInterval ?? this.profile.fireInterval ?? Infinity;
@@ -121,6 +123,7 @@ export class Emplacement {
     this.aimTolerance = config.aimTolerance ?? this.profile.aimTolerance ?? Math.PI;
     this.spreadMrad = config.spreadMrad ?? this.profile.spreadMrad ?? 0;
 
+    this.missionState = this.missionControlled ? this._initialMissionState : 'active';
     this.state = 'unknown';
     this.lastFireT = -Infinity;
     this.alertSince = -Infinity;
@@ -173,7 +176,6 @@ export class Emplacement {
     }
   }
 
-
   _setVisualVisible(visible) {
     for (const mesh of this._meshes) mesh.isVisible = !!visible;
   }
@@ -205,7 +207,7 @@ export class Emplacement {
   }
 
   setContact(simTime, source, memorySec = 8, targetPos = null) {
-    if (!Number.isFinite(simTime) || !this.alive) return false;
+    if (!Number.isFinite(simTime) || !this.alive || !this.isMissionInteractive()) return false;
     const hadContact = this.hasContact(simTime);
     if (!hadContact) this.alertSince = simTime;
     this.contactSource = source === 'radar' ? 'radar' : 'visual';
@@ -225,7 +227,7 @@ export class Emplacement {
   }
 
   hasContact(simTime) {
-    return this.alive && Number.isFinite(simTime) && simTime <= this.contactUntil && this.contactSource !== 'none';
+    return this.alive && this.isMissionInteractive() && Number.isFinite(simTime) && simTime <= this.contactUntil && this.contactSource !== 'none';
   }
 
   clearContact() {
@@ -236,7 +238,29 @@ export class Emplacement {
     this.lastKnownTarget = null;
   }
 
+  isMissionInteractive() {
+    return !this.missionControlled || this.missionState === 'active';
+  }
+
+  setMissionState(next) {
+    if (!this.missionControlled) return false;
+    if (next !== 'inactive' && next !== 'active' && next !== 'completed') return false;
+    this.missionState = next;
+    this.clearContact();
+    if (next === 'active' && this.alive) {
+      this.state = 'spotted';
+      this._setVisualVisible(true);
+    } else if (next === 'inactive' && this.alive) {
+      this.state = 'unknown';
+      this._setVisualVisible(false);
+    } else if (next === 'completed') {
+      this._setVisualVisible(true);
+    }
+    return true;
+  }
+
   spot() {
+    if (!this.isMissionInteractive()) return false;
     if (this.state === 'unknown') {
       this.state = 'spotted';
       this._setVisualVisible(true);
@@ -246,7 +270,7 @@ export class Emplacement {
   }
 
   damage(amount) {
-    if (!this.alive || !Number.isFinite(amount) || amount <= 0) return false;
+    if (!this.alive || !this.isMissionInteractive() || !Number.isFinite(amount) || amount <= 0) return false;
     const applied = Math.max(0, amount * this.damageTakenMultiplier);
     this.hp = Math.max(0, this.hp - applied);
     if (this.hp === 0) { this._destroy(); return true; }
@@ -267,6 +291,7 @@ export class Emplacement {
     if (this._disposed) return;
     this.hp = this.maxHp;
     this.alive = true;
+    this.missionState = this.missionControlled ? this._initialMissionState : 'active';
     this.state = 'unknown';
     this.lastFireT = -Infinity;
     this.clearContact();
@@ -313,6 +338,8 @@ export class Emplacement {
       turnRate: this.turnRate || undefined,
       aimTolerance: this.aimTolerance || undefined,
       spreadMrad: this.spreadMrad || undefined,
+      missionControlled: this.missionControlled || undefined,
+      missionState: this.missionControlled ? this.missionState : undefined,
     };
   }
 }

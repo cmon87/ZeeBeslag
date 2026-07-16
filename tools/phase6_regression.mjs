@@ -24,12 +24,12 @@ async function walk(dir, out = []) {
 }
 
 const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-for (const script of ['vendor', 'build', 'build:offline', 'validate:dist', 'test:phase6', 'test:all']) {
+for (const script of ['vendor', 'build', 'build:offline', 'validate:dist', 'test:phase6', 'test:phase7', 'test:all']) {
   check(typeof packageJson.scripts?.[script] === 'string', `npm-script ontbreekt: ${script}`);
 }
 
 const main = await readFile(join(root, 'src/main.js'), 'utf8');
-check(main.includes("M6.6.0 mobiele-performance"), 'stabiele runtimebuild M6.6.0 ontbreekt');
+check(/M(?:6\.6\.0 mobiele-performance|7\.0\.0 level1-bruggenhoofd)/.test(main), 'mobiele productionbasis ontbreekt');
 
 const index = await readFile(join(root, 'index.html'), 'utf8');
 for (const spec of VENDOR_FILES) check(index.includes(`vendor/${spec.file}`), `index mist lokale vendor ${spec.file}`);
@@ -41,14 +41,14 @@ check(new Set(RUNTIME_ASSETS).size === RUNTIME_ASSETS.length, 'runtime-manifest 
 const repoAssets = [
   ...(await walk(join(root, 'models'))),
   ...(await walk(join(root, 'sound'))),
-].map((path) => relative(root, path).replaceAll('\\', '/')).sort();
+].map(path => relative(root, path).replaceAll('\\', '/')).sort();
 const manifestAssets = [...RUNTIME_ASSETS].sort();
 check(JSON.stringify(repoAssets) === JSON.stringify(manifestAssets), 'models/sound bevat assets buiten het expliciete runtime-manifest');
 
 check(!existsSync(join(root, '_backup')), '_backup staat nog in de projectroot');
-check(!(await walk(join(root, 'src'))).some((path) => path.endsWith('.bak')), 'src bevat nog .bak-bestanden');
+check(!(await walk(join(root, 'src'))).some(path => path.endsWith('.bak')), 'src bevat nog .bak-bestanden');
 
-const totalBytes = (await Promise.all(RUNTIME_ASSETS.map(async (asset) => (await stat(join(root, asset))).size)))
+const totalBytes = (await Promise.all(RUNTIME_ASSETS.map(async asset => (await stat(join(root, asset))).size)))
   .reduce((sum, bytes) => sum + bytes, 0);
 check(totalBytes < 75 * 1024 * 1024, `runtime-assets zijn te groot: ${(totalBytes / 1024 / 1024).toFixed(1)} MiB`);
 for (const asset of RUNTIME_ASSETS) {
@@ -62,6 +62,7 @@ for (const tool of [
   'tools/build-production.mjs',
   'tools/validate-production.mjs',
   'tools/phase6_regression.mjs',
+  'tools/phase7_regression.mjs',
 ]) {
   const parsed = spawnSync(process.execPath, ['--check', join(root, tool)], { encoding: 'utf8' });
   check(parsed.status === 0, `${tool} bevat een syntaxfout: ${parsed.stderr}`);

@@ -1,6 +1,25 @@
 # ZeeBeslag
 
-ZeeBeslag is een mobiele 3D-zeeslaggame in Babylon.js met WebGPU als voorkeursbackend en WebGL2 als terugval.
+ZeeBeslag is een mobiele 3D-artilleriegame in Babylon.js. De oceaansimulatie gebruikt WebGPU-compute; een browser en toestel met WebGPU zijn daarom vereist.
+
+## Level 1: Bruggenhoofd
+
+Het schip ligt voor anker voor het eiland en ondersteunt een geallieerde landing. De speler voltooit drie opeenvolgende vuurmissies:
+
+1. een kustbatterij uitschakelen;
+2. een strandbunker neutraliseren;
+3. inlandse artillerie vernietigen.
+
+### Mobiele bediening
+
+- speel in landscape;
+- sleep op de linkerzijde van het scherm om het inslagpunt te corrigeren;
+- wacht tot minimaal één geschutstoren gereed staat;
+- gebruik de rode vuurknop rechtsonder;
+- gebruik de cameraknop voor de lage doelcamera of hoge overzichtscamera;
+- gebruik pauze om alle gameplaytimers en projectielen stil te zetten.
+
+Level 1 bevat bewust geen vaarbesturing, keyboard/muisbediening of audio.
 
 ## Ontwikkelstart
 
@@ -10,7 +29,7 @@ Start de projectroot via een lokale HTTP-server. Open `index.html` niet rechtstr
 python -m http.server 8899
 ```
 
-Open daarna `http://127.0.0.1:8899/`.
+Open daarna `http://127.0.0.1:8899/` op een mobiele WebGPU-browser.
 
 De ontwikkelpagina probeert eerst lokale Babylon-bestanden uit `vendor/`. Als die ontbreken, gebruikt zij tijdelijk de gepinde CDN-versie.
 
@@ -28,7 +47,7 @@ Dit haalt Babylon.js **9.14.0** en de bijbehorende glTF-loaders op en valideert 
 npm run test:all
 ```
 
-De regressieset controleert syntax, imports, gameplayfasen, scheepsschaal, lifecycle, collisions, tactische AI, mobiele performance en distributie.
+De regressieset controleert syntax, imports, scheepsschaal, lifecycle, collisions, tactische AI, mobiele performance, distributie en de volledige level-1-missielogica.
 
 ## Productionbuild
 
@@ -51,6 +70,10 @@ npm run build:offline
 ```
 
 De map `dist/` is de publiceerbare versie.
+
+## Ontwikkelaarsmenu
+
+Het technische menu is in normale gameplay verborgen. Voeg `?dev=1` aan de URL toe om het te tonen.
 
 ## Branchbeleid
 

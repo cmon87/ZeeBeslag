@@ -1,0 +1,63 @@
+// Level 1: Bruggenhoofd.
+// Bewust klein: een verankerd schip, drie opeenvolgende vuurmissies en alleen touchbesturing.
+
+export const LEVEL_1 = Object.freeze({
+  id: 'bruggenhoofd',
+  title: 'BRUGGENHOOFD',
+  subtitle: 'Bied artilleriesteun aan de geallieerde landing.',
+  movementMode: 'anchored',
+  spottingMode: 'forwardObserver',
+  aim: Object.freeze({
+    initialOffsetX: -55,
+    initialOffsetZ: 35,
+    fineSpeed: 24,
+    maxSpeed: 280,
+    curve: 2.15,
+  }),
+  salvo: Object.freeze({
+    roundsPerTurret: 1,
+    fireCooldown: 5,
+    readyOnly: true,
+  }),
+  objectives: Object.freeze([
+    Object.freeze({
+      id: 'L1-T1',
+      type: 'battery',
+      label: 'KUSTBATTERIJ',
+      phaseLabel: 'LANDINGSZONE',
+      orderText: 'Neutraliseer de kustbatterij die de landingsvaartuigen onder vuur neemt.',
+      timeLimit: 95,
+      hp: 72,
+      canFire: true,
+      fireInterval: 11,
+      reactionTime: 6,
+      spreadMrad: 28,
+      placement: Object.freeze({ x: 0.18, z: 0.34, minHeight: 5 }),
+    }),
+    Object.freeze({
+      id: 'L1-T2',
+      type: 'bunker',
+      label: 'STRANDBUNKER',
+      phaseLabel: 'STRANDHOOFD',
+      orderText: 'Schakel de bunker uit zodat de troepen het strand kunnen verlaten.',
+      timeLimit: 115,
+      hp: 105,
+      canFire: false,
+      placement: Object.freeze({ x: 0.34, z: 0.57, minHeight: 7 }),
+    }),
+    Object.freeze({
+      id: 'L1-T3',
+      type: 'battery',
+      label: 'VIJANDELIJKE ARTILLERIE',
+      phaseLabel: 'OPMARS',
+      orderText: 'Vernietig de inlandse artillerie voordat de geallieerde opmars vastloopt.',
+      timeLimit: 110,
+      hp: 88,
+      canFire: true,
+      fireInterval: 10,
+      reactionTime: 5,
+      spreadMrad: 25,
+      placement: Object.freeze({ x: 0.61, z: 0.43, minHeight: 12 }),
+    }),
+  ]),
+});

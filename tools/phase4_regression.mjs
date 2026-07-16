@@ -133,7 +133,6 @@ equal(hardNetwork.difficulty, DIFFICULTY_PROFILES.hard, 'moeilijkheid komt uit c
 check(DIFFICULTY_PROFILES.hard.spreadMultiplier < DIFFICULTY_PROFILES.normal.spreadMultiplier, 'hard maakt vijand nauwkeuriger');
 check(DIFFICULTY_PROFILES.hard.reloadMultiplier < DIFFICULTY_PROFILES.normal.reloadMultiplier, 'hard laat vijand sneller herladen');
 
-// Combat gebruikt netwerkcontact en vuurt niet omdat de speler het doel al dan niet heeft gespot.
 const fireRegistry = new TargetRegistry(scene);
 const fireBattery = new Emplacement(scene, 'battery', {
   id:'FB', pos:new Vector3(), reactionTime:0, turnRate:100, aimTolerance:Math.PI,
@@ -156,7 +155,6 @@ equal(combat.enemyFire(0.1, 0.5, fireBattery, closePlayer, ballistics, null), fa
 fireBattery.clearContact();
 equal(combat.enemyFire(0.1, 2, fireBattery, closePlayer, ballistics, null), false, 'batterij vuurt nooit zonder contact');
 
-// Scatter gebruikt typeprofielen in plaats van generieke hp=100.
 const scatterRegistry = new TargetRegistry(scene);
 const fakeIsland = { root:{position:new Vector3()}, hitRadius:3000, bounds(){return{x0:-2000,z0:-2000,span:4000};}, sample(){return 20;} };
 equal(scatterRegistry.scatter(fakeIsland, { count:4, minDist:50, mix:['battery','bunker','radar','depot'] }), 4, 'scatter plaatst alle profieltypen');
@@ -168,7 +166,7 @@ const director = fs.readFileSync(path.join(root, 'src/game/matchDirector.js'), '
 check(main.includes("new DefenseNetwork(registry, island"), 'main maakt één verdedigingsnetwerk');
 check(main.includes('defenseNetwork.update(simTime, playerShip)'), 'hoofdloop werkt vijandelijke sensoren bij');
 check(!main.includes("emp.state === 'spotted' || matchDirector.autoSpot"), 'vijandelijk vuur is niet meer gekoppeld aan speler-spotting');
-check(main.includes('combatController.enemyFire(cdt, simTime'), 'AI ontvangt frame-dt voor draaisnelheid');
+check(/combatController\.enemyFire\((?:cdt|gameDt),\s*simTime/.test(main), 'AI ontvangt frame-dt voor draaisnelheid');
 check(director.includes("'verdedigingsnetwerk'"), 'missiereset wist vijandelijk contact');
 
 console.log(`Phase 4 regression tests: ${passed} assertions passed.`);

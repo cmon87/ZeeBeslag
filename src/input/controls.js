@@ -1,147 +1,204 @@
-// controls.js
-// M1.1: Volledige migratie naar Pointer Events API, inclusief defensieve CSS en nodeType checks.
-// M1.12: Robuuste PointerCapture try-catch patches ter voorkoming van DOMExceptions op mobiel (multitouch).
+// Mobile-only inputlaag voor Level 1.
+// Alleen touch/pen wordt als gameplayinput geaccepteerd. Pointer-cancel voert nooit een actie uit.
+
+export const joyState = {
+  left: { x: 0, y: 0 },
+  right: { x: 0, y: 0 }, // compatibiliteit voor devmodules; level 1 gebruikt hem niet.
+};
+export const altState = { up: false, down: false };
+
+function isTouchPointer(e) {
+  return !e.pointerType || e.pointerType === 'touch' || e.pointerType === 'pen';
+}
 
 export function setupBtn(el, cb) {
-  if (!el) return;
-  let a = false;
-  
-  el.style.userSelect = 'none';
-  el.style.webkitUserSelect = 'none';
-  el.style.touchAction = 'none';
-  el.style.webkitTouchCallout = 'none';
+  if (!el) return () => {};
+  let activePointer = null;
+  let cancelled = false;
 
-  const s = e => {
-    e.preventDefault();
-    if (a) return;
-    a = true;
-    el.classList.add('active');
+  const reset = (e) => {
+    if (activePointer !== null && e && e.pointerId !== activePointer) return;
     try {
-      if (el.setPointerCapture) el.setPointerCapture(e.pointerId);
-    } catch (_) {}
-  };
-  
-  const en = e => {
-    e.preventDefault();
-    if (!a) return;
-    a = false;
-    el.classList.remove('active');
-    try {
-      if (el.releasePointerCapture && el.hasPointerCapture && el.hasPointerCapture(e.pointerId)) {
+      if (e && el.releasePointerCapture && el.hasPointerCapture && el.hasPointerCapture(e.pointerId)) {
         el.releasePointerCapture(e.pointerId);
       }
     } catch (_) {}
-    cb();
+    activePointer = null;
+    el.classList.remove('active');
+    el.style.transform = '';
   };
-  
-  el.addEventListener('pointerdown', s);
-  el.addEventListener('pointerup', en);
-  el.addEventListener('pointercancel', en);
+
+  const down = (e) => {
+    if (!isTouchPointer(e) || el.disabled || activePointer !== null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    activePointer = e.pointerId;
+    cancelled = false;
+    el.classList.add('active');
+    el.style.transform = 'scale(0.92)';
+    try { el.setPointerCapture && el.setPointerCapture(e.pointerId); } catch (_) {}
+  };
+
+  const up = (e) => {
+    if (e.pointerId !== activePointer) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const shouldRun = !cancelled && !el.disabled;
+    reset(e);
+    if (shouldRun && typeof cb === 'function') cb();
+  };
+
+  const cancel = (e) => {
+    if (e.pointerId !== activePointer) return;
+    e.preventDefault();
+    e.stopPropagation();
+    cancelled = true;
+    reset(e);
+  };
+
+  el.style.touchAction = 'none';
+  el.addEventListener('pointerdown', down);
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', cancel);
+  el.addEventListener('lostpointercapture', cancel);
+
+  return () => {
+    el.removeEventListener('pointerdown', down);
+    el.removeEventListener('pointerup', up);
+    el.removeEventListener('pointercancel', cancel);
+    el.removeEventListener('lostpointercapture', cancel);
+  };
 }
 
-export const joyState = { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } };
-export const altState = { up: false, down: false };
+export class MobileInputController {
+  constructor() {
+    this.enabled = false;
+    this.aimEnabled = false;
+    this.fireEnabled = false;
+    this.isAiming = false;
+    this._pointerId = null;
+    this._originX = 0;
+    this._originY = 0;
+    this._maxRadius = 58;
+    this._fireHandler = null;
+    this._detachFire = null;
+    this._attached = false;
+    this._handlers = null;
+  }
 
-(function() {
-  // Blokkade voor native mobile gedrag (context menu's op long press)
-  window.oncontextmenu = () => false;
-
-  const bL = document.getElementById('joyBaseL'), kL = document.getElementById('joyKnobL');
-  const bR = document.getElementById('joyBaseR'), kR = document.getElementById('joyKnobR');
-  const DEAD = 8, MAX_R = 48, DRAG_THRESHOLD = 5;
-  const pointers = {};
-  
-  const side = x => x < window.innerWidth / 2 ? 'left' : 'right';
-  const knob = (b, k, dx, dy) => {
-    const r = Math.min(Math.sqrt(dx * dx + dy * dy), MAX_R);
-    const a = Math.atan2(dy, dx);
-    k.style.transform = `translate(calc(-50% + ${Math.cos(a) * r}px),calc(-50% + ${Math.sin(a) * r}px))`;
-  };
-  
-  // Node type check toegevoegd om crashes op textnodes te voorkomen
-  const onUI = t => t.target && t.target.nodeType === 1 && typeof t.target.closest === 'function' && t.target.closest('[data-ui]');
-
-  document.addEventListener('pointerdown', e => {
-    if (onUI(e)) return;
-    e.preventDefault();
-    const sd = side(e.clientX);
-    const b = sd === 'left' ? bL : bR;
-    if (b) {
-        b.style.left = e.clientX + 'px';
-        b.style.top = e.clientY + 'px';
-        b.style.opacity = '1';
+  attach() {
+    if (this._attached || typeof document === 'undefined') return this;
+    this.base = document.getElementById('joyBaseL');
+    this.knob = document.getElementById('joyKnobL');
+    this.fireButton = document.getElementById('btnFire');
+    if (!this.base || !this.knob || !this.fireButton) {
+      throw new Error('Mobiele bediening mist joyBaseL, joyKnobL of btnFire');
     }
-    pointers[e.pointerId] = { sd, ox: e.clientX, oy: e.clientY, active: false };
-  }, { passive: false });
 
-  document.addEventListener('pointermove', e => {
-    const p = pointers[e.pointerId];
-    if (!p) return;
-    e.preventDefault();
-    const dx = e.clientX - p.ox, dy = e.clientY - p.oy;
-    const d = Math.sqrt(dx * dx + dy * dy);
-    
-    // Positive Friction: pas reageren na de drag threshold
-    if (!p.active && d > DRAG_THRESHOLD) p.active = true;
-    
-    if (p.active) {
-      joyState[p.sd].x = d > DEAD ? (dx / Math.max(d, 1)) * Math.min(d / MAX_R, 1) : 0;
-      joyState[p.sd].y = d > DEAD ? (dy / Math.max(d, 1)) * Math.min(d / MAX_R, 1) : 0;
-      knob(p.sd === 'left' ? bL : bR, p.sd === 'left' ? kL : kR, dx, dy);
+    const onDown = (e) => {
+      if (!this.enabled || !this.aimEnabled || !isTouchPointer(e) || this._pointerId !== null) return;
+      if (e.target && e.target.closest && e.target.closest('[data-ui]')) return;
+      if (e.clientX > window.innerWidth * 0.72) return;
+      e.preventDefault();
+      this._pointerId = e.pointerId;
+      this._originX = e.clientX;
+      this._originY = e.clientY;
+      this.isAiming = true;
+      this.base.style.left = `${e.clientX}px`;
+      this.base.style.top = `${e.clientY}px`;
+      this.base.style.opacity = '1';
+      try { document.documentElement.setPointerCapture && document.documentElement.setPointerCapture(e.pointerId); } catch (_) {}
+    };
+
+    const onMove = (e) => {
+      if (e.pointerId !== this._pointerId) return;
+      e.preventDefault();
+      const dx = e.clientX - this._originX;
+      const dy = e.clientY - this._originY;
+      const length = Math.hypot(dx, dy);
+      const radius = Math.min(length, this._maxRadius);
+      const nx = length > 0 ? dx / length : 0;
+      const ny = length > 0 ? dy / length : 0;
+      const strength = Math.min(1, length / this._maxRadius);
+      const deadzoned = strength < 0.10 ? 0 : (strength - 0.10) / 0.90;
+      joyState.left.x = nx * deadzoned;
+      joyState.left.y = ny * deadzoned;
+      this.knob.style.transform = `translate(calc(-50% + ${nx * radius}px),calc(-50% + ${ny * radius}px))`;
+    };
+
+    const finish = (e) => {
+      if (e.pointerId !== this._pointerId) return;
+      e.preventDefault();
+      this._pointerId = null;
+      this.isAiming = false;
+      joyState.left.x = 0;
+      joyState.left.y = 0;
+      this.base.style.opacity = '0';
+      this.knob.style.transform = 'translate(-50%,-50%)';
+    };
+
+    document.addEventListener('pointerdown', onDown, { passive: false });
+    document.addEventListener('pointermove', onMove, { passive: false });
+    document.addEventListener('pointerup', finish, { passive: false });
+    document.addEventListener('pointercancel', finish, { passive: false });
+    this._handlers = { onDown, onMove, finish };
+    this._detachFire = setupBtn(this.fireButton, () => {
+      if (this.enabled && this.fireEnabled && this._fireHandler) this._fireHandler();
+    });
+    this._attached = true;
+    this._syncFireButton();
+    return this;
+  }
+
+  setFireHandler(fn) { this._fireHandler = typeof fn === 'function' ? fn : null; }
+  setEnabled(value) {
+    this.enabled = !!value;
+    this.aimEnabled = this.enabled;
+    if (!this.enabled) this.resetAim();
+    this._syncFireButton();
+  }
+  setAimEnabled(value) {
+    this.aimEnabled = this.enabled && !!value;
+    if (!this.aimEnabled) this.resetAim();
+  }
+  setFireEnabled(value) {
+    this.fireEnabled = this.enabled && !!value;
+    this._syncFireButton();
+  }
+  setFireReady(value) {
+    if (!this.fireButton) return;
+    this.fireButton.dataset.ready = value ? '1' : '0';
+  }
+  resetAim() {
+    this._pointerId = null;
+    this.isAiming = false;
+    joyState.left.x = 0;
+    joyState.left.y = 0;
+    joyState.right.x = 0;
+    joyState.right.y = 0;
+    if (this.base) this.base.style.opacity = '0';
+    if (this.knob) this.knob.style.transform = 'translate(-50%,-50%)';
+  }
+  _syncFireButton() {
+    if (!this.fireButton) return;
+    const active = this.enabled && this.fireEnabled;
+    this.fireButton.disabled = !active;
+    this.fireButton.style.opacity = active ? '1' : '0.42';
+  }
+  get aim() { return joyState.left; }
+
+  dispose() {
+    if (this._handlers) {
+      document.removeEventListener('pointerdown', this._handlers.onDown);
+      document.removeEventListener('pointermove', this._handlers.onMove);
+      document.removeEventListener('pointerup', this._handlers.finish);
+      document.removeEventListener('pointercancel', this._handlers.finish);
     }
-  }, { passive: false });
+    if (this._detachFire) this._detachFire();
+    this._handlers = null;
+    this._detachFire = null;
+    this._attached = false;
+  }
+}
 
-  const endPointer = e => {
-    const p = pointers[e.pointerId];
-    if (!p) return;
-    e.preventDefault();
-    joyState[p.sd].x = 0;
-    joyState[p.sd].y = 0;
-    const b = p.sd === 'left' ? bL : bR;
-    const k = p.sd === 'left' ? kL : kR;
-    if (b) b.style.opacity = '0';
-    if (k) k.style.transform = 'translate(-50%,-50%)';
-    delete pointers[e.pointerId];
-  };
-
-  document.addEventListener('pointerup', endPointer, { passive: false });
-  document.addEventListener('pointercancel', endPointer, { passive: false });
-
-  ['Up', 'Down'].forEach(d => {
-    const b = document.getElementById('btn' + d);
-    if (!b) return;
-    const k = d.toLowerCase();
-    
-    b.style.userSelect = 'none';
-    b.style.webkitUserSelect = 'none';
-    b.style.touchAction = 'none';
-    b.style.webkitTouchCallout = 'none';
-    
-    const s = e => {
-      e.preventDefault();
-      altState[k] = true;
-      b.classList.add('holding');
-      try {
-        if (b.setPointerCapture) b.setPointerCapture(e.pointerId);
-      } catch (_) {}
-    };
-    
-    const en = e => {
-      e.preventDefault();
-      altState[k] = false;
-      b.classList.remove('holding');
-      try {
-        if (b.releasePointerCapture && b.hasPointerCapture && b.hasPointerCapture(e.pointerId)) {
-          b.releasePointerCapture(e.pointerId);
-        }
-      } catch (_) {}
-    };
-    
-    b.addEventListener('pointerdown', s);
-    b.addEventListener('pointerup', en);
-    b.addEventListener('pointercancel', en);
-  });
-
-  document.addEventListener('keydown', e => { if (e.key === 'ArrowUp' || e.key === 'w') altState.up = true; if (e.key === 'ArrowDown' || e.key === 's') altState.down = true; });
-  document.addEventListener('keyup', e => { if (e.key === 'ArrowUp' || e.key === 'w') altState.up = false; if (e.key === 'ArrowDown' || e.key === 's') altState.down = false; });
-})();
+export const mobileInput = new MobileInputController();

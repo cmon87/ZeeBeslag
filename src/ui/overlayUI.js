@@ -6,8 +6,9 @@
 // deed dus zichtbaar niets.
 
 export class OverlayUI {
-  constructor(matchDirector) {
+  constructor(matchDirector, opts = {}) {
     this.md = matchDirector;
+    this.restricted = opts.restricted === true;
     this.container = null;
     this.playBtn = null;
     this.camBtn = null;
@@ -24,13 +25,11 @@ export class OverlayUI {
 
     this.buildPlayBtn();
     this.buildCamBtn();
-    this.buildFollowBtn();
+    if (!this.restricted) this.buildFollowBtn();
 
     document.body.appendChild(this.container);
   }
 
-  // Volgknop voor het eskader. Verborgen tot het eskader geladen is, zodat de knop pas verschijnt
-  // als er echt iets te volgen valt. Verschijnt hij niet, dan laadde plane_zero.glb niet.
   buildFollowBtn() {
     this.followBtn = document.createElement('button');
     this._style(this.followBtn);
@@ -42,7 +41,7 @@ export class OverlayUI {
 
   setFollowHandler(fn) { this._followHandler = fn; }
 
-  showFollow(v) { if (this.followBtn) this.followBtn.style.display = v ? '' : 'none'; }
+  showFollow(v) { if (!this.restricted && this.followBtn) this.followBtn.style.display = v ? '' : 'none'; }
 
   setFollowActive(v) {
     if (!this.followBtn) return;
@@ -82,9 +81,6 @@ export class OverlayUI {
 
   _style(btn) {
     btn.setAttribute('data-ui', '');
-    // M3.6: compacter. Op een telefoon in portret stonden MENU, PAUZE, DOEL en VOLG samen met
-    // de gecentreerde vijand-balk in dezelfde 60px hoogte; dat paste nooit en gaf de stapeling
-    // op de testscreenshots. Kleinere knoppen hier, de vijand-balk zakt in hud.js onder de rij.
     btn.style.cssText = 'background:rgba(10,20,40,0.72);color:#7eb8d4;border:1px solid rgba(126,184,212,0.4);border-radius:8px;padding:7px 8px;font-family:"Courier New",monospace;font-size:10px;font-weight:bold;letter-spacing:0.02em;white-space:nowrap;backdrop-filter:blur(8px);transition:transform 0.1s, background 0.2s, border-color 0.2s, color 0.2s;outline:none;';
   }
 
@@ -99,12 +95,35 @@ export class OverlayUI {
     this.md.setPlayBtn(this.playBtn);
   }
 
-  // Tik: doorloop de cameramodi (doel, kwart, hoog, brug).
-  // Vasthouden: vrije cinematische camera aan of uit.
   buildCamBtn() {
     this.camBtn = document.createElement('button');
     this._style(this.camBtn);
     this._camLabel('doel');
+
+    if (this.restricted) {
+      let downPointer = null;
+      this.camBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); e.stopPropagation(); downPointer = e.pointerId;
+        try { this.camBtn.setPointerCapture(e.pointerId); } catch (_) {}
+        this.camBtn.style.transform = 'scale(0.92)';
+      });
+      this.camBtn.addEventListener('pointerup', (e) => {
+        if (e.pointerId !== downPointer) return;
+        e.preventDefault(); e.stopPropagation(); downPointer = null;
+        this.camBtn.style.transform = 'scale(1)';
+        const cc = this.md.refs.chaseCam;
+        if (!cc) return;
+        const next = cc.style === 'hoog' ? 'doel' : 'hoog';
+        cc.setStyle(next, true);
+        this._camLabel(next);
+      });
+      this.camBtn.addEventListener('pointercancel', (e) => {
+        if (e.pointerId !== downPointer) return;
+        downPointer = null; this.camBtn.style.transform = 'scale(1)';
+      });
+      this.container.appendChild(this.camBtn);
+      return;
+    }
 
     let hold = null, held = false;
     const down = (e) => {

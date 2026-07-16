@@ -20,8 +20,32 @@ jobs:
         with:
           node-version: 22
 
-      - name: Run regressions
-        run: npm run test:all
+      - name: Static module check
+        run: npm run check
+
+      - name: Phase 1 regressions
+        run: npm run test:phase1
+
+      - name: Ship model regressions
+        run: npm run test:ship-model
+
+      - name: Phase 2 regressions
+        run: npm run test:phase2
+
+      - name: Phase 3 regressions
+        run: npm run test:phase3
+
+      - name: Phase 4 regressions
+        run: npm run test:phase4
+
+      - name: Phase 5 regressions
+        run: npm run test:phase5
+
+      - name: Phase 6 regressions
+        run: npm run test:phase6
+
+      - name: Phase 7 regressions
+        run: npm run test:phase7
 
       - name: Build production distribution
         run: npm run build

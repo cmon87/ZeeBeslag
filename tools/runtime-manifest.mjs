@@ -11,7 +11,6 @@ export const RUNTIME_ASSETS = Object.freeze([
   'models/muzzleflash/muzzle_flash_atlas.png',
   'models/muzzleflash/muzzle_smoke_atlas.png',
   'models/planes/plane_zero.glb',
-  'sound/SFX/firemainguns.mp3',
 ]);
 
 export const FORBIDDEN_PRODUCTION_PARTS = Object.freeze([

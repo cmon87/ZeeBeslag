@@ -24,7 +24,6 @@ class Vector3 {
   static Up() { return new Vector3(0, 1, 0); }
   static Cross(a, b) { return new Vector3(a.y*b.z-a.z*b.y, a.z*b.x-a.x*b.z, a.x*b.y-a.y*b.x); }
 }
-
 class Color3 { constructor(r = 0, g = 0, b = 0) { this.r = r; this.g = g; this.b = b; } }
 
 globalThis.BABYLON = { Vector3, Color3 };
@@ -37,12 +36,7 @@ const fakeButton = { onclick: null };
 globalThis.document = {
   body: { appendChild() {} },
   createElement() {
-    return {
-      style: {},
-      innerHTML: '',
-      setAttribute() {},
-      querySelector() { return fakeButton; },
-    };
+    return { style: {}, innerHTML: '', setAttribute() {}, querySelector() { return fakeButton; } };
   },
 };
 
@@ -52,7 +46,6 @@ const { CombatController } = await import('../src/game/combatController.js');
 const { AtlasFX } = await import('../src/game/atlasFx.js');
 const { WavesGenerator } = await import('../src/ocean/wavesGenerator.js');
 
-// GameClock: alleen PLAYING mag gameplaytijd laten lopen.
 const clock = new GameClock({ state: GAME_STATES.LOADING, timeScale: 1 });
 equal(clock.tick(0.05).gameDt, 0, 'loading bevriest gameplay');
 clock.setState(GAME_STATES.PLAYING);
@@ -67,7 +60,6 @@ equal(clock.tick(0.05).gameDt, 0, 'game-over bevriest gameplay');
 clock.reset();
 equal(clock.gameTime, 0, 'klok reset naar nul');
 
-// MatchDirector: state, runtime scaling, game-over en herhaalde volledige reset.
 const calls = new Map();
 const hit = name => calls.set(name, (calls.get(name) || 0) + 1);
 const scaleHistory = [];
@@ -116,7 +108,6 @@ equal(calls.get('wake'), 2, 'wake wordt per reset eenmaal gewist');
 equal(calls.get('plume'), 2, 'achtergrondpluim wordt per reset hersteld');
 equal(calls.get('context'), 2, 'main-context wordt per reset eenmaal hersteld');
 
-// CombatController: geplande schoten zijn expliciet annuleerbaar.
 const combat = new CombatController({ fireCooldown: 4, roundsPerTurret: 2, burstGap: 0.1, turretGap: 0.2 }, null);
 combat.pendingShots.push({ turret: 0, at: 1 }, { turret: 1, at: 2 });
 combat.cancelPending();
@@ -125,7 +116,6 @@ combat.lastFireT = 99;
 combat.reset();
 equal(combat.lastFireT, -10, 'combat-reset wist cooldown');
 
-// AtlasFX: schaal nul is echt nul, geen verborgen 0.0001-update meer.
 const atlas = Object.create(AtlasFX.prototype);
 atlas._embers = { updateSpeed: 1 };
 atlas._spray = { updateSpeed: 1 };
@@ -135,7 +125,6 @@ equal(atlas._spray.updateSpeed, 0, 'spray bevriest exact');
 atlas.setTimeScale(1.5);
 near(atlas._embers.updateSpeed, 0.015, 1e-12, 'particle-schaal herstelt correct');
 
-// WavesGenerator: geen performance.now; tijd loopt uitsluitend op update-delta.
 const waveCalls = [[], [], []];
 const wg = Object.create(WavesGenerator.prototype);
 wg._prewarmTime = 10000;
@@ -153,11 +142,10 @@ wg.reset();
 equal(wg._simTime, 10000, 'oceaanreset herstelt pre-warmtijd');
 equal(wg._tick, 0, 'oceaanreset wist cascade-tick');
 
-// Integratiehandtekeningen tegen regressie door latere refactors.
 const main = fs.readFileSync(path.join(root, 'src/main.js'), 'utf8');
 const overlay = fs.readFileSync(path.join(root, 'src/ui/overlayUI.js'), 'utf8');
 const wake = fs.readFileSync(path.join(root, 'src/ocean/wakeManager.js'), 'utf8');
-check(main.includes('const frame = matchDirector.tick(dts);'), 'main gebruikt centrale klok');
+check(/const frame = matchDirector\.tick\((?:dts|realDt)\);/.test(main), 'main gebruikt centrale klok');
 check(main.includes('if (gameplayActive) {'), 'main gate gameplay-systemen op lifecycle');
 check(main.includes('matchDirector.completeLoading()'), 'main beëindigt loading expliciet');
 check(overlay.includes('this.md.isPaused') && overlay.includes('this.md.resume()'), 'pauzeknop hervat via state');

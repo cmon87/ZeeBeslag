@@ -17,6 +17,8 @@ export class CombatController {
 
     this.lastFireT = -10;
     this.pendingShots = [];
+    this.playerFirePolicy = { readyOnly: false, roundsPerTurret: cfg.roundsPerTurret };
+    this.lastSalvoTurretCount = 0;
     this._enemyCh = cfg.enemyMuzzleChannel ?? 0;
 
     this._muzzle = new BABYLON.Vector3();
@@ -30,11 +32,19 @@ export class CombatController {
     this.defenseNetwork = network || null;
   }
 
+  setPlayerFirePolicy(policy = {}) {
+    this.playerFirePolicy = {
+      readyOnly: policy.readyOnly === true,
+      roundsPerTurret: Math.max(1, Math.floor(policy.roundsPerTurret ?? this.cfg.roundsPerTurret ?? 1)),
+    };
+  }
+
   cancelPending() { this.pendingShots.length = 0; }
 
   reset() {
     this.cancelPending();
     this.lastFireT = -10;
+    this.lastSalvoTurretCount = 0;
   }
 
   getFireReady(simTime) {
@@ -42,12 +52,18 @@ export class CombatController {
   }
 
   fireSalvo(simTime, playerShip) {
-    if (simTime - this.lastFireT < this.cfg.fireCooldown) return false;
-    this.lastFireT = simTime;
+    if (!playerShip || simTime - this.lastFireT < this.cfg.fireCooldown) return false;
+    const aim = this.playerAimStatus(playerShip, this._targetForPlayer || null);
+    const turretIndices = this.playerFirePolicy.readyOnly
+      ? aim.statuses.filter(s => s.ready).map(s => s.index)
+      : playerShip.turrets.map((_, index) => index);
+    if (turretIndices.length === 0) return false;
 
+    this.lastFireT = simTime;
+    this.lastSalvoTurretCount = turretIndices.length;
     let delay = 0;
-    for (let ti = 0; ti < playerShip.turrets.length; ti++) {
-      for (let i = 0; i < this.cfg.roundsPerTurret; i++) {
+    for (const ti of turretIndices) {
+      for (let i = 0; i < this.playerFirePolicy.roundsPerTurret; i++) {
         this.pendingShots.push({ turret: ti, at: simTime + delay });
         delay += this.cfg.burstGap;
       }
@@ -65,8 +81,6 @@ export class CombatController {
     }
   }
 
-  // Nieuwe vorm: enemyFire(cdt, simTime, emplacement, playerShip, ballistics, fx)
-  // Compatibele vorm: enemyFire(simTime, emplacement, playerShip, ballistics, fx)
   enemyFire(...args) {
     let cdt, simTime, emplacement, playerShip, ballistics, fx;
     if (typeof args[1] === 'number') {
@@ -114,8 +128,6 @@ export class CombatController {
     if (simTime - emplacement.lastFireT < control.fireInterval) return false;
 
     const tof = dist / this.cfg.muzzleVelocity;
-    // Alleen vers contact krijgt volledige snelheidsvoorspelling. Bij geheugencontact vuurt de
-    // batterij op de laatst bekende positie en wordt geen verborgen actuele snelheid gebruikt.
     const freshContact = control.contactSource === 'radar' || control.contactSource === 'visual' || control.contactSource === 'legacy';
     const pVelX = freshContact ? Math.sin(playerShip.heading) * playerShip.speed : 0;
     const pVelZ = freshContact ? Math.cos(playerShip.heading) * playerShip.speed : 0;
@@ -159,9 +171,30 @@ export class CombatController {
     this._shoot(enemyShip, ti, ballistics, fx, this.cfg.enemySpreadMrad);
   }
 
+  setPlayerAimTarget(target) {
+    this._targetForPlayer = target || null;
+  }
+
+  playerAimStatus(playerShip, target = this._targetForPlayer) {
+    if (!playerShip || !target || typeof playerShip.getTurretReadiness !== 'function') {
+      return { statuses: [], readyCount: 0, total: playerShip?.turrets?.length || 0, allReady: false, anyReady: false };
+    }
+    const statuses = playerShip.getTurretReadiness(target, this.cfg.muzzleVelocity, {
+      yawTolerance: this.cfg.aimReadyRad,
+      elevationTolerance: this.cfg.aimReadyElevRad ?? this.cfg.aimReadyRad * 1.5,
+    });
+    const readyCount = statuses.reduce((n, status) => n + (status.ready ? 1 : 0), 0);
+    return {
+      statuses,
+      readyCount,
+      total: statuses.length,
+      allReady: statuses.length > 0 && readyCount === statuses.length,
+      anyReady: readyCount > 0,
+    };
+  }
+
   playerAimReady(playerShip, target) {
-    if (!playerShip || !target) return false;
-    return playerShip.aimError(target, this.cfg.muzzleVelocity) < this.cfg.aimReadyRad;
+    return this.playerAimStatus(playerShip, target).allReady;
   }
 
   update(cdt, simTime, playerShip, enemyShip, ballistics, fx, gameOver) {
